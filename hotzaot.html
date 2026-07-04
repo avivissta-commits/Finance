@@ -1093,6 +1093,35 @@ const SYNC_ALIASES = {
   "יוסי": "yossi",
   "יוסף": "yossi"
 };
+const HEB2LAT = {
+  "א": "a",
+  "ב": "b",
+  "ג": "g",
+  "ד": "d",
+  "ה": "h",
+  "ו": "u",
+  "ז": "z",
+  "ח": "ch",
+  "ט": "t",
+  "י": "i",
+  "כ": "k",
+  "ך": "k",
+  "ל": "l",
+  "מ": "m",
+  "ם": "m",
+  "נ": "n",
+  "ן": "n",
+  "ס": "s",
+  "ע": "a",
+  "פ": "p",
+  "ף": "f",
+  "צ": "tz",
+  "ץ": "tz",
+  "ק": "k",
+  "ר": "r",
+  "ש": "sh",
+  "ת": "t"
+};
 function strHash(s) {
   let h = 5381;
   s = String(s || "");
@@ -1101,12 +1130,19 @@ function strHash(s) {
   }
   return h.toString(36);
 }
+function translit(name) {
+  let o = "";
+  for (const ch of String(name || "")) {
+    o += HEB2LAT[ch] !== undefined ? HEB2LAT[ch] : ch;
+  }
+  return o.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
 function userSyncId(user) {
   if (user && user.syncId) return String(user.syncId); // מזהה מפורש (אם הוגדר) — גובר
   const name = (user && user.name || "").trim();
   if (SYNC_ALIASES[name]) return "user_" + SYNC_ALIASES[name]; // אביב→user_aviv, יוסי→user_yossi
-  const ascii = name.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  return "user_" + (ascii ? ascii + "_" : "") + strHash(name.toLowerCase()); // דטרמיניסטי מהשם, ≥6 תווים
+  const t = translit(name); // שמוליק→shmulik (דטרמיניסטי, זהה בכל דפדפן)
+  return "user_" + (t || strHash(name.toLowerCase()));
 }
 
 /* Hook: מסנכרן את המשתמש הפעיל לפי syncId קבוע (נגזר מהשם), זהה בכל המכשירים.
@@ -1122,7 +1158,30 @@ function useCloudSync(activeId, syncId, data, setData, onStatus) {
   }, [activeId]);
   const pulledFor = useRef(null);
   const pushTimer = useRef(null);
+  const skipPush = useRef(false); // מונע דחיפה חוזרת של נתונים שזה עתה אומצו מהענן
   const status = s => onStatus && onStatus(s);
+
+  // מאמץ נתוני ענן אם הם חדשים יותר מהמקומי (משמש גם בטעינה וגם ברענון החי)
+  const adopt = (sid, env) => {
+    if (!(env && env.data && !env.empty)) return false;
+    const localUpdated = loadMeta(sid).updatedAt || 0;
+    if ((+env.updatedAt || 0) <= localUpdated) return false;
+    const m = migrate(env.data);
+    skipPush.current = true;
+    setData(m);
+    try {
+      localStorage.setItem(userKey(activeIdRef.current), JSON.stringify(m));
+    } catch (_) {}
+    saveMeta(sid, {
+      rev: env.rev || 1,
+      updatedAt: env.updatedAt || Date.now()
+    });
+    status({
+      status: "synced",
+      at: Date.now()
+    });
+    return true;
+  };
   const pushNow = async (sid, d) => {
     if (!syncEnabled() || !sid) return;
     const rev = (loadMeta(sid).rev || 0) + 1,
@@ -1148,6 +1207,7 @@ function useCloudSync(activeId, syncId, data, setData, onStatus) {
     } catch (e) {
       if (e && e.message === "conflict" && e.server && e.server.data) {
         const m = migrate(e.server.data);
+        skipPush.current = true;
         setData(m);
         try {
           localStorage.setItem(userKey(activeIdRef.current), JSON.stringify(m));
@@ -1167,7 +1227,7 @@ function useCloudSync(activeId, syncId, data, setData, onStatus) {
     }
   };
   useEffect(() => {
-    // PULL בכל שינוי של המשתמש הפעיל (syncId)
+    // PULL ראשוני בכל שינוי של המשתמש הפעיל (syncId)
     let alive = true;
     if (!syncId || !syncEnabled()) {
       status({
@@ -1182,31 +1242,7 @@ function useCloudSync(activeId, syncId, data, setData, onStatus) {
       try {
         const env = await cloudGet(syncId);
         if (!alive) return;
-        if (env && env.data && !env.empty) {
-          const localUpdated = loadMeta(syncId).updatedAt || 0;
-          if ((+env.updatedAt || 0) > localUpdated) {
-            // בענן חדש ממש → מאמצים
-            const m = migrate(env.data);
-            setData(m);
-            try {
-              localStorage.setItem(userKey(activeIdRef.current), JSON.stringify(m));
-            } catch (_) {}
-            saveMeta(syncId, {
-              rev: env.rev || 1,
-              updatedAt: env.updatedAt || Date.now()
-            });
-            status({
-              status: "synced",
-              at: Date.now()
-            });
-          } else {
-            // מקומי חדש/שווה → דוחפים
-            await pushNow(syncId, dataRef.current);
-          }
-        } else {
-          // ענן ריק → מזריעים ממקומי
-          await pushNow(syncId, dataRef.current);
-        }
+        if (!adopt(syncId, env)) await pushNow(syncId, dataRef.current); // ענן לא חדש → דוחפים/מזריעים מקומי
       } catch (e) {
         if (alive) status({
           status: "offline",
@@ -1221,15 +1257,43 @@ function useCloudSync(activeId, syncId, data, setData, onStatus) {
     };
   }, [syncId]);
   useEffect(() => {
-    // PUSH מושהה בכל שינוי (רק אחרי שה-PULL של ה-syncId הנוכחי הסתיים)
+    // PUSH מושהה בכל שינוי (מדלגים אם השינוי הגיע מאימוץ ענן)
     if (!syncId || !syncEnabled()) return;
     if (pulledFor.current !== syncId) return;
+    if (skipPush.current) {
+      skipPush.current = false;
+      return;
+    }
     if (pushTimer.current) clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(() => pushNow(syncId, dataRef.current), 800);
     return () => {
       if (pushTimer.current) clearTimeout(pushTimer.current);
     };
   }, [data, syncId]);
+  useEffect(() => {
+    // רענון חי: polling כל 15ש' + כשחוזרים לטאב → אימוץ שינויים ממכשיר אחר
+    if (!syncId || !syncEnabled()) return;
+    let alive = true;
+    const refresh = async () => {
+      if (!alive || pulledFor.current !== syncId) return;
+      try {
+        const env = await cloudGet(syncId);
+        if (alive) adopt(syncId, env);
+      } catch (_) {}
+    };
+    const iv = setInterval(refresh, 15000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [syncId]);
   useEffect(() => {
     // ריטריי כשחוזרת רשת
     const on = () => {
