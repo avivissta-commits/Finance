@@ -52,7 +52,8 @@ wrangler deploy
 - אחרי שינוי כלשהו תראו **PUT** ל-`.../api/data`.
 בדיקה ישירה של ה-API:
 ```
-GET  https://finance.avivissta.workers.dev/api/health              -> { ok:true }
+GET  https://finance.avivissta.workers.dev/api/health   -> { ok:true, kvBound:true, bindings:[...] }
+#   אם kvBound:false — ה-KV לא מחובר ל-Worker. בדקו את bindings כדי לראות באיזה שם הוא כן מחובר.
 GET  https://finance.avivissta.workers.dev/api/data  (x-sync-id: X) -> { empty:true } | { ...data }
 ```
 
@@ -64,3 +65,13 @@ GET  https://finance.avivissta.workers.dev/api/data  (x-sync-id: X) -> { empty:t
 ## הערות אבטחה
 - ה-`x-sync-id` (User ID) הוא המפתח לנתוני אותו משתמש; ה-Worker שומר ב-KV רק את ה-SHA-256 שלו.
 - ל-KV אין הצפנה מקצה-לקצה. לפרטיות חזקה — אפשר להוסיף הצפנת client-side או auth אמיתי (הרחבה עתידית).
+
+## סנכרון רשימת המשתמשים (users_index)
+מעבר לנתונים של כל משתמש, גם **רשימת המשתמשים** מסונכרנת דרך מפתח גלובלי אחד ב-KV:
+```
+x-sync-id: users_index  ->  { users:[{syncId,name,avatar,createdAt,updatedAt}], deleted:[syncId...] }
+```
+- משתמש שנוצר במכשיר אחד מופיע בכל המכשירים (משיכה+מיזוג בטעינה, poll כל 20ש', ורענון בפוקוס).
+- הזהות היא ה-syncId הנגזר מהשם (לא ה-id המקומי) — כך "שמוליק" משני מכשירים הוא אותו משתמש.
+- מחיקה משתמשת ב-tombstone (deleted) כדי שתתפשט לכל המכשירים ולא תתבטל במיזוג; הדאטה של המשתמש בענן מאופסת.
+- המשתמש הפעיל נשאר מקומי לכל מכשיר (hakesef_active), לא מסתנכרן.

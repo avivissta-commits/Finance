@@ -1145,6 +1145,131 @@ function userSyncId(user) {
   return "user_" + (t || strHash(name.toLowerCase()));
 }
 
+/* ===================== סנכרון רשימת המשתמשים (users_index) =====================
+   מפתח גלובלי אחד ב-KV מחזיק את רשימת כל המשתמשים, כך שמשתמש שנוצר במכשיר אחד
+   מופיע בכולם. הזהות היא syncId (נגזר מהשם) ולא ה-id המקומי הרנדומלי.
+   מחיקה משתמשת ב-tombstones כדי שהמחיקה תתפשט ולא תתבטל ע"י מיזוג. */
+const REGISTRY_SID = "users_index";
+const REG_META_KEY = "hakesef_reg_meta";
+const REG_DELETED_KEY = "hakesef_reg_deleted";
+function loadRegMeta() {
+  try {
+    return JSON.parse(localStorage.getItem(REG_META_KEY) || "{}") || {};
+  } catch (_) {
+    return {};
+  }
+}
+function saveRegMeta(m) {
+  try {
+    localStorage.setItem(REG_META_KEY, JSON.stringify(m || {}));
+  } catch (_) {}
+}
+function loadDeleted() {
+  try {
+    return JSON.parse(localStorage.getItem(REG_DELETED_KEY) || "[]") || [];
+  } catch (_) {
+    return [];
+  }
+}
+function saveDeleted(a) {
+  try {
+    localStorage.setItem(REG_DELETED_KEY, JSON.stringify(a || []));
+  } catch (_) {}
+}
+function rosterSyncId(u) {
+  return u && u.syncId || userSyncId(u);
+}
+
+/* ממזג רשימה מקומית עם ענן: איחוד לפי syncId, פחות tombstones */
+function mergeRegistry(localRoster, cloud) {
+  const cu = cloud && cloud.data && cloud.data.users || [];
+  const cd = cloud && cloud.data && cloud.data.deleted || [];
+  const del = new Set([...cd, ...loadDeleted()]);
+  const bySync = {},
+    order = [];
+  const add = e => {
+    const sid = rosterSyncId(e);
+    if (del.has(sid)) return;
+    if (!bySync[sid]) {
+      bySync[sid] = {
+        id: e.id || uid(),
+        name: e.name,
+        avatar: e.avatar || null,
+        syncId: sid,
+        createdAt: e.createdAt || Date.now(),
+        updatedAt: e.updatedAt || Date.now()
+      };
+      order.push(sid);
+    } else if (!bySync[sid].avatar && e.avatar) {
+      bySync[sid].avatar = e.avatar;
+    }
+  };
+  (localRoster || []).forEach(add);
+  cu.forEach(c => add({
+    id: null,
+    name: c.name,
+    avatar: c.avatar,
+    syncId: c.syncId || userSyncId(c),
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt
+  }));
+  return {
+    merged: order.map(s => bySync[s]),
+    deleted: [...del]
+  };
+}
+async function pushRegistry(roster, deleted) {
+  if (!syncEnabled()) return null;
+  const toCloud = list => (list || []).map(u => ({
+    syncId: rosterSyncId(u),
+    name: u.name,
+    avatar: u.avatar || null,
+    createdAt: u.createdAt || Date.now(),
+    updatedAt: u.updatedAt || Date.now()
+  }));
+  try {
+    const res = await cloudPut(REGISTRY_SID, {
+      schema: SCHEMA,
+      rev: (loadRegMeta().rev || 0) + 1,
+      updatedAt: Date.now(),
+      data: {
+        users: toCloud(roster),
+        deleted: deleted || []
+      }
+    });
+    saveRegMeta({
+      rev: res.rev,
+      updatedAt: res.updatedAt
+    });
+    return res;
+  } catch (e) {
+    if (e && e.message === "conflict" && e.server) {
+      // מישהו כתב במקביל → ממזגים ומנסים שוב
+      const m = mergeRegistry(roster, e.server);
+      saveDeleted(m.deleted);
+      try {
+        const res2 = await cloudPut(REGISTRY_SID, {
+          schema: SCHEMA,
+          rev: (e.server.rev || 0) + 1,
+          updatedAt: Date.now(),
+          data: {
+            users: toCloud(m.merged),
+            deleted: m.deleted
+          }
+        });
+        saveRegMeta({
+          rev: res2.rev,
+          updatedAt: res2.updatedAt
+        });
+        return res2;
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 /* Hook: מסנכרן את המשתמש הפעיל לפי syncId קבוע (נגזר מהשם), זהה בכל המכשירים.
    activeId משמש רק לכתיבת הקאש המקומי (userKey). */
 function useCloudSync(activeId, syncId, data, setData, onStatus) {
@@ -1304,7 +1429,55 @@ function useCloudSync(activeId, syncId, data, setData, onStatus) {
   }, [syncId]);
 }
 
-/* ============================ הכנסה לפי חודש ============================ */
+/* Hook: מסנכרן את רשימת המשתמשים (users_index) — משיכה+מיזוג בטעינה, poll, ופוקוס. */
+function useRegistrySync(users, setUsers, onRosterChange) {
+  const usersRef = useRef(users);
+  useEffect(() => {
+    usersRef.current = users;
+  }, [users]);
+  useEffect(() => {
+    if (!syncEnabled()) return;
+    let alive = true;
+    const sync = async () => {
+      if (!alive) return;
+      try {
+        const cloud = await cloudGet(REGISTRY_SID).catch(() => null);
+        const c = cloud && !cloud.empty ? cloud : null;
+        const {
+          merged,
+          deleted
+        } = mergeRegistry(usersRef.current, c);
+        saveDeleted(deleted);
+        const cur = usersRef.current || [];
+        const rosterChanged = merged.length !== cur.length || merged.some(m => !cur.some(u => rosterSyncId(u) === m.syncId)) || cur.some(u => !merged.some(m => m.syncId === rosterSyncId(u)));
+        if (rosterChanged && alive) {
+          setUsers(merged);
+          onRosterChange && onRosterChange(merged);
+        }
+        // דוחפים אם הענן חסר משתמשים מקומיים או tombstones
+        const cu = c && c.data && c.data.users || [];
+        const cloudSids = new Set(cu.map(x => x.syncId || userSyncId(x)));
+        const sameUsers = merged.length === cu.length && merged.every(m => cloudSids.has(m.syncId));
+        const cloudDel = new Set(c && c.data && c.data.deleted || []);
+        const sameDel = deleted.length === cloudDel.size && deleted.every(d => cloudDel.has(d));
+        if (!sameUsers || !sameDel) await pushRegistry(merged, deleted);
+      } catch (_) {}
+    };
+    sync();
+    const iv = setInterval(sync, 20000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") sync();
+    };
+    window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+      window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+}
 function ymTitle(ym) {
   const p = ymParts(ym);
   return new Intl.DateTimeFormat("he-IL", {
@@ -7617,6 +7790,21 @@ function App() {
     syncId: (users.find(u => u.id === activeId) || {}).syncId
   }), [data.profile && data.profile.name, users, activeId]);
   useCloudSync(activeId, activeSyncId, data, setData, setSyncStatus);
+  const activeIdRef2 = useRef(activeId);
+  useEffect(() => {
+    activeIdRef2.current = activeId;
+  }, [activeId]);
+  useRegistrySync(users, setUsers, merged => {
+    // אם המשתמש הפעיל נמחק במכשיר אחר → עוברים לראשון ברשימה
+    if (merged.length && !merged.some(u => u.id === activeIdRef2.current)) {
+      const next = merged[0];
+      setActiveId(next.id);
+      setData(loadUserData(next.id));
+      setYm(todayYM());
+      setTab("home");
+      closeModal();
+    }
+  });
   const [ym, setYm] = useState(todayYM);
   const [pageDir, setPageDir] = useState(0);
   const [closing, setClosing] = useState(false);
@@ -8051,14 +8239,28 @@ function App() {
     const id = uid(),
       nm = (name || "").trim() || "משתמש חדש";
     const fresh = blankProfileData(nm);
+    const sid = userSyncId({
+      name: nm
+    });
     try {
       localStorage.setItem(userKey(id), JSON.stringify(fresh));
     } catch (e) {}
-    setUsers(us => [...us, {
+    const entry = {
       id,
       name: nm,
-      avatar: fresh.profile && fresh.profile.avatar || null
-    }]);
+      avatar: fresh.profile && fresh.profile.avatar || null,
+      syncId: sid,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    let nextRoster;
+    setUsers(us => {
+      nextRoster = [...us, entry];
+      return nextRoster;
+    });
+    const del = loadDeleted().filter(d => d !== sid);
+    saveDeleted(del); // מבטלים tombstone אם המשתמש נוצר מחדש
+    if (syncEnabled()) pushRegistry(nextRoster || [entry], del); // מוסיפים לרשימה הגלובלית בענן
     setActiveId(id);
     setData(fresh);
     setYm(todayYM());
@@ -8074,12 +8276,27 @@ function App() {
   };
   const deleteUser = id => {
     if ((users || []).length <= 1) return; // הגנה: אי אפשר למחוק את האחרון
-    const nm = (users.find(u => u.id === id) || {}).name || "המשתמש";
+    const target = users.find(u => u.id === id) || {};
+    const nm = target.name || "המשתמש";
+    const sid = rosterSyncId(target);
     try {
       localStorage.removeItem(userKey(id));
     } catch (e) {}
     const remaining = users.filter(u => u.id !== id);
     setUsers(remaining);
+    const del = [...new Set([...loadDeleted(), sid])];
+    saveDeleted(del); // tombstone → המחיקה מתפשטת לכל המכשירים
+    if (syncEnabled()) {
+      pushRegistry(remaining, del);
+      try {
+        cloudPut(sid, {
+          schema: SCHEMA,
+          rev: (loadMeta(sid).rev || 0) + 1,
+          updatedAt: Date.now(),
+          data: blankProfileData(nm)
+        }).catch(() => {});
+      } catch (_) {} // איפוס הדאטה שלו בענן
+    }
     if (id === activeId) {
       // אם מחקנו את הפעיל — עוברים לאחר וטוענים אותו
       const next = remaining[0];
