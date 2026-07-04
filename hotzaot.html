@@ -2469,8 +2469,8 @@ function Carousel({
     dragging.current = false;
     const frac = dragRef.current / (w.current || 1);
     let ni = idx;
-    if (frac <= -0.32) ni = idx + 1; // גרירה שמאלה → הבא
-    else if (frac >= 0.32) ni = idx - 1; // גרירה ימינה → הקודם
+    if (frac <= -0.2) ni = idx + 1; // גרירה שמאלה → הבא
+    else if (frac >= 0.2) ni = idx - 1; // גרירה ימינה → הקודם
     dragRef.current = 0;
     setAnim(true);
     setDrag(0);
@@ -2496,6 +2496,13 @@ function Carousel({
     touchAction: "pan-y",
     willChange: "transform"
   };
+  const goTo = i => {
+    setAnim(true);
+    setDrag(0);
+    dragging.current = false;
+    setIdx(i + 1);
+  }; // מעבר לעמוד i (0-based)
+
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "rounded-3xl py-4",
     style: glass()
@@ -2523,15 +2530,27 @@ function Carousel({
   }, renderPage(pg, pi)))))), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-center items-center gap-1.5 mt-3",
     style: {
-      height: 8
+      height: 14
     }
   }, pages.map((_, i) => {
     const raw = Math.abs(live - i);
     const dist = Math.min(raw, n - raw); // מרחק מעגלי
     const t = Math.max(0, 1 - dist); // 1 בפעילה, 0 ברחוקה
-    return /*#__PURE__*/React.createElement("span", {
+    return /*#__PURE__*/React.createElement("button", {
       key: i,
+      onClick: () => goTo(i),
+      "aria-label": `עמוד ${i + 1}`,
+      className: "grid place-items-center transition-transform active:scale-90",
       style: {
+        height: 14,
+        width: 14 + 12 * t,
+        padding: 0,
+        background: "none",
+        border: "none"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "block",
         height: 6,
         borderRadius: 99,
         background: GREEN,
@@ -2539,7 +2558,7 @@ function Carousel({
         opacity: 0.26 + 0.74 * t,
         transition: dragging.current ? "none" : "width .38s cubic-bezier(.22,1,.36,1), opacity .38s ease"
       }
-    });
+    }));
   })));
 }
 function RingsCarousel({
@@ -2551,59 +2570,13 @@ function RingsCarousel({
 }) {
   const ins = budgetInsights(calc, ym);
   const clip = s => s.length > 10 ? s.slice(0, 9) + "…" : s;
-  const hasInc = (calc.income || 0) > 0;
-  const inc = calc.income || 1;
-  const pctTxt = frac => hasInc ? Math.round(frac * 100) + "%" : "—";
-  const cats = data.categories || [];
-  const ub = calc.unbudgeted;
+  const ub = calc.unbudgeted || 0;
+  // מכנה חסום: סך ההוצאות בפועל החודש (ניצול כל התקציבים + לא-מתוקצב). לעולם לא ההכנסה.
+  const budgetedSpend = (calc.budgets || []).reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
+  const totalSpend = budgetedSpend + ub;
+  const ubShare = totalSpend > 0 ? ub / totalSpend : 0;
+  const oppR = ins.opp && ins.opp.ratio > 0 ? ins.opp.ratio : 0; // ניצול מול תקציב בלבד; אין נפילה להכנסה
 
-  // עמוד 1 — תובנות (מה לעשות עכשיו)
-  const oppR = ins.opp ? ins.opp.ratio > 0 ? ins.opp.ratio : hasInc ? ins.opp.used / inc : 0 : 0;
-  const page1 = [ins.closest ? {
-    pct: Math.min(100, ins.closest.ratio * 100),
-    center: Math.round(ins.closest.ratio * 100) + "%",
-    color: ins.closest.atRisk ? AMBER : GREEN,
-    label: `${ins.closest.emoji} ${clip(ins.closest.name)}`,
-    value: ins.closest.atRisk ? "בסיכון לפי הקצב" : "קרוב לתקציב",
-    open: "closest"
-  } : {
-    pct: 0,
-    center: "—",
-    color: "#c7cfc9",
-    label: "אין תקציבים",
-    value: "לפי הקצב",
-    open: null
-  }, ins.opp ? {
-    pct: Math.min(100, oppR * 100),
-    center: Math.round(oppR * 100) + "%",
-    color: oppR >= 1 ? RED : oppR >= 0.8 ? AMBER : GREEN,
-    label: `${ins.opp.emoji} ${clip(ins.opp.name)}`,
-    value: "אפשר לצמצם",
-    open: "opportunity"
-  } : {
-    pct: 0,
-    center: "—",
-    color: "#c7cfc9",
-    label: "אין הזדמנות",
-    value: "לצמצום",
-    open: null
-  }, ub > 0 ? {
-    pct: hasInc ? Math.min(100, ub / inc * 100) : 0,
-    center: pctTxt(ub / inc),
-    color: hasInc ? ub / inc < 0.05 ? AMBER : RED : "#c7cfc9",
-    label: "🧾 לא מתוקצב",
-    value: "דורש שיוך",
-    open: "unbudgeted"
-  } : {
-    pct: 100,
-    center: "✓",
-    color: GREEN,
-    label: "🧾 לא מתוקצב",
-    value: "הכל משויך",
-    open: null
-  }];
-
-  // עמוד 2 — סיכון תקציבים
   const varB = calc.budgets.filter(b => !b.fixed);
   const overCount = varB.filter(b => (calc.usedByBudget[b.id] || 0) > (+b.target || 0)).length;
   const riskCount = varB.filter(b => {
@@ -2612,51 +2585,82 @@ function RingsCarousel({
     const r = t ? u / t : 0;
     return r >= 0.80 && r < 1;
   }).length;
-  const page2 = overCount > 0 || riskCount > 0 ? [{
+  const shares = categoryShares(data, calc).slice(0, 3);
+
+  // ---- כל הרינגים שהמערכת מציעה, לפי סדר חשיבות. נאגור רק את מה שיש בו מידע אמיתי ----
+  const ringList = [];
+  if (ins.closest) ringList.push({
+    pct: Math.min(100, ins.closest.ratio * 100),
+    center: Math.round(ins.closest.ratio * 100) + "%",
+    color: ins.closest.atRisk ? AMBER : GREEN,
+    label: `${ins.closest.emoji} ${clip(ins.closest.name)}`,
+    value: ins.closest.atRisk ? "בסיכון לפי הקצב" : "קרוב לתקציב",
+    open: "closest"
+  });
+  if (ins.opp && oppR > 0) ringList.push({
+    pct: Math.min(100, oppR * 100),
+    center: Math.round(oppR * 100) + "%",
+    color: oppR >= 1 ? RED : oppR >= 0.8 ? AMBER : GREEN,
+    label: `${ins.opp.emoji} ${clip(ins.opp.name)}`,
+    value: "אפשר לצמצם",
+    open: "opportunity"
+  });
+  if (ub > 0) ringList.push({
+    pct: Math.min(100, ubShare * 100),
+    center: totalSpend > 0 ? Math.round(ubShare * 100) + "%" : "—",
+    color: ubShare >= 0.25 ? RED : AMBER,
+    label: "🧾 לא מתוקצב",
+    value: "מסך ההוצאות",
+    open: "unbudgeted"
+  });else if (totalSpend > 0) ringList.push({
+    pct: 100,
+    center: "✓",
+    color: GREEN,
+    label: "🧾 לא מתוקצב",
+    value: "הכל משויך",
+    open: null
+  });
+  if (overCount > 0) ringList.push({
     pct: varB.length ? overCount / varB.length * 100 : 0,
     center: String(overCount),
-    color: overCount > 0 ? RED : GREEN,
+    color: RED,
     label: "🔴 בחריגה",
     value: "תקציבים",
-    open: overCount > 0 ? "over" : null
-  }, {
+    open: "over"
+  });
+  if (riskCount > 0) ringList.push({
     pct: varB.length ? riskCount / varB.length * 100 : 0,
     center: String(riskCount),
-    color: riskCount > 0 ? AMBER : GREEN,
+    color: AMBER,
     label: "🟠 בסיכון",
     value: "קרובים למגבלה",
-    open: riskCount > 0 ? "risk" : null
-  }] : null;
-
-  // עמוד 3 — קטגוריות (כמה אחוז מההכנסה כל קטגוריה לוקחת)
-  const catStats = cats.map(c => {
-    const bs = calc.budgets.filter(b => b.catId === c.id);
-    const budUsed = bs.reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
-    const unbUsed = calc.active.filter(e => !e.budgetId && e.catId === c.id).reduce((s, e) => s + (+e.amount || 0), 0);
-    const used = budUsed + unbUsed;
-    const ratio = hasInc ? used / inc : 0; // כל ההוצאות בקטגוריה כאחוז מההכנסה
-    return {
-      c,
-      used,
-      ratio
-    };
-  }).filter(x => x.used > 0).sort((a, b) => b.used - a.used).slice(0, 3);
-  const page3 = catStats.length ? catStats.map(({
+    open: "risk"
+  });
+  shares.forEach(({
     c,
-    ratio
-  }) => ({
-    pct: hasInc ? Math.min(100, ratio * 100) : 0,
-    center: pctTxt(ratio),
-    color: hasInc ? GREEN : "#c7cfc9",
+    share
+  }) => ringList.push({
+    pct: Math.min(100, share * 100),
+    center: Math.round(share * 100) + "%",
+    color: GREEN,
     label: `${c.emoji} ${clip(c.name)}`,
-    value: "מההכנסה",
+    value: "מסך ההוצאות",
     open: {
       cat: c
     }
-  })) : null;
-  const pages = [page1];
-  if (page2) pages.push(page2);
-  if (page3) pages.push(page3);
+  }));
+  if (!ringList.length) ringList.push({
+    pct: 0,
+    center: "—",
+    color: "#c7cfc9",
+    label: "אין נתונים עדיין",
+    value: "התחילו להזין",
+    open: null
+  });
+
+  // ---- אריזה: 3 רינגים בכל מסך; המסך האחרון יכול להכיל 2 או 1 ----
+  const pages = [];
+  for (let i = 0; i < ringList.length; i += 3) pages.push(ringList.slice(i, i + 3));
   return /*#__PURE__*/React.createElement(Carousel, {
     pages: pages,
     onRing: onRing,
