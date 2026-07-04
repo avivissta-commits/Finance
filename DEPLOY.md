@@ -4,95 +4,74 @@
 מוטמעים בפנים. אפשר לפתוח אותה ישירות בדפדפן, לארח ב-GitHub Pages, או להגיש דרך Cloudflare Worker.
 
 ## מצב הנתונים כרגע (חשוב)
-- **מקומי, מרובה־משתמשים.** כל משתמש נשמר בנפרד ב-localStorage של הדפדפן, לפי User ID קבוע:
-  - `hakesef_users` — רשימת המשתמשים [{id,name,avatar}]
-  - `hakesef_active` — המשתמש הפעיל **במכשיר הזה בלבד** (לא מסונכרן)
-  - `hakesef_u_<id>` — כל הנתונים של אותו משתמש (הכנסות, תקציבים, הוצאות, קטגוריות, פרופיל)
-- **אין כרגע סנכרון ענן פעיל.** קוד הסנכרון קיים באפליקציה אבל רדום (לא מחובר ל-UI).
-- לכן, כרגע, תפקיד ה-Worker הוא **לארח/להגיש את האפליקציה**. ה-API של הסנכרון כלול ומוכן,
-  אבל האפליקציה עדיין לא קוראת לו. (ראו "סנכרון ענן עתידי" בהמשך.)
+- **מקומי, מרובה־משתמשים.** כל משתמש נשמר בנפרד ב-localStorage לפי User ID קבוע:
+  - `hakesef_users`, `hakesef_active` (המשתמש הפעיל — מקומי למכשיר), `hakesef_u_<id>` (נתוני המשתמש).
+- **אין כרגע סנכרון ענן פעיל.** קוד הסנכרון קיים אבל רדום. תפקיד ה-Worker כרגע: **להגיש את האפליקציה**.
 
 ---
 
-## מה יש בחבילה
-- `hotzaot.html` — האפליקציה (קובץ יחיד, מקור האמת).
-- `index.html` — עותק זהה, בשם שנוח ל-GitHub Pages ול-Worker (public/index.html).
-- `worker.js` — Worker שמגיש את האפליקציה (+ API סנכרון מגובה-KV, לעתיד).
-- `wrangler.toml` — הגדרות פריסה ל-Cloudflare.
-
-> אחרי כל עדכון של האפליקציה: מעדכנים את hotzaot.html, ואז `cp hotzaot.html index.html`
-> (וגם `cp hotzaot.html public/index.html` אם פורסים ל-Worker).
-
----
-
-## אפשרות א' — GitHub (Pages)
-1. צרו ריפו חדש (למשל hakesef).
-2. העלו את הקבצים (מספיק index.html בשביל אתר; אפשר להוסיף גם את השאר):
-   ```bash
-   git init
-   git add index.html hotzaot.html worker.js wrangler.toml DEPLOY.md
-   git commit -m "הכסף שלי — אפליקציה"
-   git branch -M main
-   git remote add origin https://github.com/<user>/hakesef.git
-   git push -u origin main
-   ```
-3. ב-GitHub: Settings → Pages → Source: Deploy from a branch → main / (root) → Save.
-4. אחרי דקה תקבלו כתובת https://<user>.github.io/hakesef/ . זהו — האפליקציה עובדת (מקומית, אופליין).
+## מבנה הריפו (שורש)
+```
+repo/
+├─ index.html         ← האפליקציה (מה שמוגש כאתר)
+├─ hotzaot.html       ← עותק זהה (מקור)
+├─ worker.js          ← ה-Worker
+├─ wrangler.toml      ← הגדרות פריסה
+├─ .assetsignore      ← אילו קבצים לא להגיש כאתר
+└─ DEPLOY.md
+```
+> הקבצים הסטטיים יושבים **בשורש** הריפו, ולכן ב-wrangler.toml:
+> `[assets] directory = "."`. **אין צורך בתיקיית public.**
 
 ---
 
-## אפשרות ב' — Cloudflare Worker (הגשה)
-### שלב 1 — התקנות חד־פעמיות
+## תיקון השגיאה "public does not exist"
+זו הסיבה לכישלון: ההגדרה הצביעה על `./public` אבל אין תיקייה כזו (הקבצים בשורש).
+**התיקון כבר בוצע** בקבצים המצורפים:
+- `wrangler.toml` → `directory = "."` (השורש, שם נמצא index.html).
+- נוסף `.assetsignore` שמונע הגשה של קבצי מקור/קונפיג (worker.js, wrangler.toml וכו').
+
+פשוט החליפו את שני הקבצים האלה בריפו, ודחפו מחדש — הבנייה תעבור.
+
+> אם בכל זאת תעדיפו את המבנה עם `public/`: צרו תיקייה `public`, העבירו אליה את `index.html`,
+> ושנו בחזרה ל-`directory = "./public"`. שתי הדרכים תקינות — בחרו אחת.
+
+---
+
+## אפשרות א' — GitHub (Pages), בלי Cloudflare
+1. Settings → Pages → Source: Deploy from a branch → main / (root) → Save.
+2. תוך דקה: `https://<user>.github.io/<repo>/`. (Pages מגיש את index.html מהשורש ישירות — פשוט יותר מ-Worker.)
+
+## אפשרות ב' — Cloudflare Worker
+### דרך Git (מה שניסית)
+מחברים את הריפו ב-Cloudflare (Workers & Pages → Create → Connect to Git). עם ה-`wrangler.toml`
+המתוקן (directory = "."), הבנייה תמצא את index.html בשורש ותפרוס. אין build command נדרש
+(זו אפליקציה סטטית בלי Vite/React-build).
+
+### דרך CLI (מקומית)
 ```bash
 npm install -g wrangler
 wrangler login
-```
-### שלב 2 — מבנה תיקיות
-```
-hakesef/
-├─ worker.js
-├─ wrangler.toml
-└─ public/
-   └─ index.html        ← זה hotzaot.html ששמו שונה
-```
-```bash
-mkdir -p public
-cp hotzaot.html public/index.html
-```
-### שלב 3 — פריסה
-```bash
 wrangler deploy
 ```
-תקבלו כתובת כמו https://hakesef.<subdomain>.workers.dev . האפליקציה תוגש משם ותעבוד (מקומית).
+תקבלו `https://hakesef.<subdomain>.workers.dev`.
 
-> **KV לא חובה כרגע.** ה-KV דרוש רק ל-API הסנכרון (/api/*), שהאפליקציה עדיין לא משתמשת בו.
-> אם wrangler deploy מתלונן על ה-binding של HAKESEF, אפשר פשוט למחוק/להעיר את הבלוק
-> [[kv_namespaces]] ב-wrangler.toml עד שתרצו להפעיל סנכרון.
+> **KV לא חובה כרגע** — נחוץ רק ל-API הסנכרון העתידי, שהאפליקציה עדיין לא קוראת לו.
+> הבלוק `[[kv_namespaces]]` מוער ב-wrangler.toml.
 
 ---
 
-## סנכרון ענן עתידי (כשנרצה)
-ה-Worker כבר כולל API מגובה-KV (GET/PUT /api/data, GET /api/health). כשנחליט לחבר
-סנכרון, העיקרון שסיכמנו:
-- **הנתונים** יסתנכרנו לענן **לפי User ID** (כל משתמש = מסמך נפרד).
-- **המשתמש הפעיל יישאר מקומי לכל מכשיר** (hakesef_active לא מסתנכרן) — כך שהחלפת משתמש
-  במכשיר אחד לא משנה את המשתמש הפעיל במכשיר אחר.
-- כדי להפעיל: יוצרים KV ומעדכנים את ה-id ב-wrangler.toml:
-  ```bash
-  wrangler kv namespace create HAKESEF
-  # מעתיקים את ה-id אל wrangler.toml במקום REPLACE_WITH_YOUR_KV_NAMESPACE_ID
-  ```
-- endpoints לבדיקה:
-  ```
-  GET  /api/health                    -> { ok: true }
-  GET  /api/data   (x-sync-id: CODE)  -> { empty:true } | { schema, rev, updatedAt, data }
-  PUT  /api/data   (x-sync-id: CODE)  body: { schema, rev, updatedAt, data }
-  ```
+## הבהרה: build או לא?
+זו **אפליקציה סטטית בלי שלב build** (אין Vite/React-build). לכן:
+- Build command: *ריק* (או `:`).
+- Output / assets directory: התיקייה שבה נמצא `index.html` — כאן זה **השורש** (`.`).
+- אם היה זה פרויקט Vite/React, אז היה build command `npm run build` ו-assets מ-`dist`. אצלנו לא.
+
+## סנכרון ענן עתידי
+ה-Worker כולל כבר API מגובה-KV (`GET/PUT /api/data`, `GET /api/health`). כשנחבר סנכרון:
+הנתונים יסתנכרנו **לפי User ID**, והמשתמש הפעיל יישאר **מקומי לכל מכשיר**. להפעלה: יוצרים KV
+(`wrangler kv namespace create HAKESEF`), מדביקים id ב-wrangler.toml ומסירים את ההערה.
 
 ## עדכון גרסה (בלי לאבד נתונים)
-מעדכנים את index.html / public/index.html ומריצים שוב wrangler deploy (או דוחפים ל-GitHub).
-נתוני המשתמשים ב-localStorage של כל מכשיר נשארים כמו שהם.
-
-## גיבוי
-מכיוון שהנתונים מקומיים, גיבוי = לשמור עותק של ערכי hakesef_* מ-localStorage
-(DevTools → Application → Local Storage). כשנחבר סנכרון, הענן יהיה הגיבוי.
+מעדכנים את `index.html` ודוחפים ל-Git (או `wrangler deploy`). נתוני המשתמשים ב-localStorage
+של כל מכשיר נשארים כמו שהם.

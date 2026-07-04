@@ -2,10 +2,10 @@ name = "hakesef"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# האפליקציה עצמה (index.html) מוגשת מהתיקייה ./public
-# שים את הקובץ hotzaot.html בשם public/index.html
+# הקבצים הסטטיים (index.html) יושבים בשורש הריפו, לכן ה-directory מצביע לשורש.
+# קובץ .assetsignore (בשורש) מוודא שקבצי המקור/קונפיג לא יוגשו כאתר.
 [assets]
-directory = "./public"
+directory = "."
 binding = "ASSETS"
 
 # ---- אחסון לסנכרון ענן (לא חובה כרגע) ----

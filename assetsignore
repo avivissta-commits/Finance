@@ -1,0 +1,11 @@
+worker.js
+wrangler.toml
+wrangler.jsonc
+DEPLOY.md
+README.md
+hotzaot.html
+package.json
+package-lock.json
+node_modules
+.git
+.gitignore
