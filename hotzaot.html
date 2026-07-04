@@ -1498,6 +1498,23 @@ function expAppearsIn(e, ym) {
 function budgetUsedFor(expenses, budgetId, ym) {
   return (expenses || []).filter(x => x.budgetId === budgetId && expAppearsIn(x, ym)).reduce((s, x) => s + (+x.amount || 0), 0);
 }
+/* ★ מקור אמת יחיד לאחוז ניצול תקציב ★
+   המכנה הוא תמיד התקציב הנוכחי (target), לעולם לא ההכנסה ולא ערך אחר.
+   מחזיר null כשאין תקציב (target<=0) — כדי שהתצוגה תראה "—"/"אין תקציב" ולא מספר לא-הגיוני.
+   אין הכפלה כפולה ב-100: זה הגורם היחיד שמכפיל ב-100. */
+function usagePct(used, target) {
+  const t = +target || 0;
+  if (t <= 0) return null;
+  return (+used || 0) / t * 100;
+}
+/* טקסט אחוז ניצול לתצוגה, עם טיפול בכל מקרי הקצה:
+   אין תקציב → "—"; חריגה קיצונית (תקציב זעום) → מוגבל ל-"999%+" כדי למנוע מספרים לא-הגיוניים כמו 1450%. */
+function usagePctText(used, target) {
+  const p = usagePct(used, target);
+  if (p == null) return "—";
+  if (p >= 1000) return "999%+";
+  return Math.round(p) + "%";
+}
 function incomeApplies(src, ym) {
   const sy = src.ym || (isISO(src.date) ? src.date.slice(0, 7) : todayYM());
   if (src.recur && +src.recur.freq) {
@@ -1641,7 +1658,7 @@ function Ring({
   const r = (size - stroke) / 2,
     c = 2 * Math.PI * r;
   const off = c - Math.min(p, 100) / 100 * c;
-  const cStr = center != null ? String(center) : Math.round(pct) + "%";
+  const cStr = center != null ? String(center) : pct >= 1000 ? "999%+" : Math.round(pct) + "%";
   const fs = size >= 70 ? cStr.length >= 7 ? 11.5 : cStr.length >= 6 ? 12.5 : cStr.length >= 5 ? 13.5 : 15 : cStr.length >= 6 ? 10.5 : 13;
   const anim = animKey != null ? "ringtext .38s cubic-bezier(.22,1,.36,1) both" : undefined;
   const glow = active ? typeof color === "string" && color.startsWith("#") ? color + "22" : "rgba(74,180,120,0.14)" : "transparent";
@@ -1702,7 +1719,7 @@ function Ring({
       color: center != null ? color : INK,
       animation: anim
     }
-  }, center != null ? center : Math.round(pct) + "%"))), (label || value != null) && /*#__PURE__*/React.createElement("div", {
+  }, center != null ? center : pct >= 1000 ? "999%+" : Math.round(pct) + "%"))), (label || value != null) && /*#__PURE__*/React.createElement("div", {
     key: animKey != null ? "t" + animKey : undefined,
     className: "text-center leading-tight w-full px-0.5",
     style: {
@@ -2591,7 +2608,7 @@ function RingsCarousel({
   const ringList = [];
   if (ins.closest) ringList.push({
     pct: Math.min(100, ins.closest.ratio * 100),
-    center: Math.round(ins.closest.ratio * 100) + "%",
+    center: usagePctText(ins.closest.used, ins.closest.target),
     color: ins.closest.atRisk ? AMBER : GREEN,
     label: `${ins.closest.emoji} ${clip(ins.closest.name)}`,
     value: ins.closest.atRisk ? "בסיכון לפי הקצב" : "קרוב לתקציב",
@@ -2599,7 +2616,7 @@ function RingsCarousel({
   });
   if (ins.opp && oppR > 0) ringList.push({
     pct: Math.min(100, oppR * 100),
-    center: Math.round(oppR * 100) + "%",
+    center: usagePctText(ins.opp.used, ins.opp.target),
     color: oppR >= 1 ? RED : oppR >= 0.8 ? AMBER : GREEN,
     label: `${ins.opp.emoji} ${clip(ins.opp.name)}`,
     value: "אפשר לצמצם",
@@ -2787,7 +2804,7 @@ function RingDetail({
       const exps = expsOf(g.id);
       const left = g.target - g.used;
       const fracPct = Math.round(ins.frac * 100);
-      const usedPct = Math.round(g.ratio * 100);
+      const usedPctTxt = usagePctText(g.used, g.target);
       const clr = g.atRisk ? AMBER : GREEN;
       body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
         className: "text-center mb-4"
@@ -2801,7 +2818,7 @@ function RingDetail({
         style: {
           color: clr
         }
-      }, usedPct, "%"), /*#__PURE__*/React.createElement("div", {
+      }, usedPctTxt), /*#__PURE__*/React.createElement("div", {
         className: "text-[12px] text-stone-400 mt-0.5"
       }, "נוצלו מתוך תקציב של ", shekel(g.target))), /*#__PURE__*/React.createElement(Flow, {
         steps: [{
@@ -2917,7 +2934,7 @@ function RingDetail({
     } else {
       openBudget = g.budget;
       const exps = expsOf(g.id);
-      const usedPct = g.target > 0 ? Math.round(g.used / g.target * 100) : null;
+      const usedPct = usagePct(g.used, g.target) == null ? null : usagePctText(g.used, g.target);
       body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
         className: "text-center mb-4"
       }, /*#__PURE__*/React.createElement("div", {
@@ -2960,9 +2977,9 @@ function RingDetail({
       }, /*#__PURE__*/React.createElement("div", {
         className: "text-[18px] font-bold",
         style: {
-          color: usedPct >= 100 ? RED : INK
+          color: (usagePct(g.used, g.target) || 0) >= 100 ? RED : INK
         }
-      }, usedPct, "%"), /*#__PURE__*/React.createElement("div", {
+      }, usedPct), /*#__PURE__*/React.createElement("div", {
         className: "text-[11px] text-stone-400 mt-0.5"
       }, "מהתקציב נוצל"))), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות · ", shekel(g.used)), /*#__PURE__*/React.createElement("div", {
         className: "space-y-1.5"
@@ -3145,7 +3162,8 @@ function BudgetCard({
   onQuickAdd
 }) {
   const planned = +budget.target || 0,
-    pct = planned ? used / planned * 100 : 0,
+    _up = usagePct(used, planned),
+    pct = _up == null ? 0 : _up,
     t = tone(pct);
   if (budget.fixed) {
     return /*#__PURE__*/React.createElement("div", {
@@ -3220,7 +3238,7 @@ function BudgetCard({
     style: {
       color: t.c
     }
-  }, Math.round(pct), "%")));
+  }, usagePctText(used, planned))));
 }
 function ExpenseRow({
   exp,
@@ -3275,7 +3293,8 @@ function BudgetRow({
   due = true
 }) {
   const planned = +budget.target || 0,
-    pct = planned ? used / planned * 100 : 0,
+    _up = usagePct(used, planned),
+    pct = _up == null ? 0 : _up,
     t = tone(pct);
   if (budget.fixed) {
     const recurring = (+budget.freq || 1) > 1;
@@ -3351,7 +3370,7 @@ function BudgetRow({
     style: {
       color: t.c
     }
-  }, Math.round(pct), "%")));
+  }, usagePctText(used, planned))));
 }
 function ExpenseRowInline({
   exp,
@@ -7055,7 +7074,8 @@ function BudgetDetail({
   }
   const exps = calc.active.filter(e => e.budgetId === budget.id);
   const used = calc.usedByBudget[budget.id] || 0;
-  const pct = planned ? used / planned * 100 : 0,
+  const pv = usagePct(used, planned),
+    pct = pv == null ? 0 : pv,
     left = planned - used,
     t = tone(pct);
   const Row = ({
@@ -7097,7 +7117,8 @@ function BudgetDetail({
     pct: pct,
     size: 56,
     stroke: 6,
-    color: t.c
+    color: t.c,
+    center: usagePctText(used, planned)
   }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 text-right"
   }, /*#__PURE__*/React.createElement("div", {
@@ -7258,6 +7279,7 @@ function CategoryCard({
   cat,
   count,
   pct,
+  center,
   onEdit
 }) {
   return /*#__PURE__*/React.createElement("button", {
@@ -7284,7 +7306,8 @@ function CategoryCard({
     pct: pct,
     size: 46,
     stroke: 5,
-    color: pct > 0 ? GREEN : "rgba(120,150,135,0.35)"
+    color: pct > 0 ? GREEN : "rgba(120,150,135,0.35)",
+    center: center
   }));
 }
 function CategoryDetail({
@@ -7304,10 +7327,11 @@ function CategoryDetail({
   const unbTotal = unbudgeted.reduce((s, e) => s + (+e.amount || 0), 0);
   const total = budTotal + unbTotal;
   const budTarget = budgets.reduce((s, b) => s + (+b.target || 0), 0);
-  const pctBudget = budTarget > 0 ? budTotal / budTarget * 100 : 0; // רק ההוצאות המתוקצבות מול יעד התקציב
-  const pctIncome = calc.income > 0 ? total / calc.income * 100 : 0;
-  const ringPct = budTarget > 0 ? pctBudget : pctIncome;
-  const ringClr = budTarget > 0 ? pctBudget >= 100 ? RED : pctBudget >= 80 ? AMBER : GREEN : total > 0 ? GREEN : "rgba(120,150,135,0.35)";
+  const pctBudget = usagePct(budTotal, budTarget); // ניצול מול התקציב (null אם אין תקציב) — לעולם לא הכנסה
+  const hasBudget = pctBudget != null;
+  const ringPct = hasBudget ? Math.min(100, pctBudget) : 0; // מילוי הטבעת חסום ל-100%
+  const ringCenter = hasBudget ? usagePctText(budTotal, budTarget) : "—";
+  const ringClr = hasBudget ? pctBudget >= 100 ? RED : pctBudget >= 80 ? AMBER : GREEN : "rgba(120,150,135,0.35)";
   const empty = !budgets.length && !unbudgeted.length;
   return /*#__PURE__*/React.createElement(Sheet, {
     title: `${cat.emoji} ${cat.name}`,
@@ -7317,11 +7341,11 @@ function CategoryDetail({
     className: "flex items-center gap-3 rounded-2xl p-3 mb-3",
     style: field
   }, /*#__PURE__*/React.createElement(Ring, {
-    pct: Math.min(100, pctIncome),
+    pct: ringPct,
     size: 54,
     stroke: 6,
-    color: total > 0 ? GREEN : "rgba(120,150,135,0.35)",
-    center: Math.round(pctIncome) + "%"
+    color: ringClr,
+    center: ringCenter
   }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 text-right"
   }, /*#__PURE__*/React.createElement("div", {
@@ -7331,7 +7355,7 @@ function CategoryDetail({
     }
   }, shekel(total)), /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-stone-400 mt-0.5"
-  }, budTarget > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, Math.round(pctBudget), "% מהתקציב · ", Math.round(pctIncome), "% מההכנסה") : /*#__PURE__*/React.createElement(React.Fragment, null, Math.round(pctIncome), "% מההכנסה")), budTarget > 0 && /*#__PURE__*/React.createElement("div", {
+  }, hasBudget ? /*#__PURE__*/React.createElement(React.Fragment, null, usagePctText(budTotal, budTarget), " מהתקציב נוצל") : /*#__PURE__*/React.createElement(React.Fragment, null, "אין תקציב מוגדר לקטגוריה")), hasBudget && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-stone-400 mt-0.5"
   }, "מתוקצב ", shekel(budTotal), " מתוך ", shekel(budTarget), " · נשאר ", shekel(Math.max(0, budTarget - budTotal)), unbTotal > 0 ? ` · ${shekel(unbTotal)} לא מתוקצב` : ""))), empty && /*#__PURE__*/React.createElement("div", {
     className: "text-center text-stone-400 text-[13px] py-4 rounded-2xl mb-3",
@@ -7347,7 +7371,8 @@ function CategoryDetail({
   }, (expanded ? budgets : budgets.slice(0, 4)).map((b, idx) => {
     const used = calc.usedByBudget[b.id] || 0,
       planned = +b.target || 0,
-      p = planned ? used / planned * 100 : 0,
+      pv = usagePct(used, planned),
+      p = pv == null ? 0 : pv,
       tt = b.fixed ? {
         c: GREEN,
         bg: "rgba(74,180,120,0.14)"
@@ -7387,7 +7412,7 @@ function CategoryDetail({
       style: {
         color: tt.c
       }
-    }, b.fixed ? "קבוע" : Math.round(p) + "%")), !b.fixed && /*#__PURE__*/React.createElement("div", {
+    }, b.fixed ? "קבוע" : usagePctText(used, planned))), !b.fixed && /*#__PURE__*/React.createElement("div", {
       className: "mt-1.5"
     }, /*#__PURE__*/React.createElement(Bar, {
       pct: p,
@@ -8450,10 +8475,12 @@ function App() {
     const total = budTotal + unb.reduce((s, e) => s + (+e.amount || 0), 0);
     const target = buds.reduce((s, b) => s + (+b.target || 0), 0);
     const count = buds.length + unb.length;
-    const pct = calc.income > 0 ? total / calc.income * 100 : 0; // כמה אחוז מההכנסה הקטגוריה לוקחת
+    const up = usagePct(budTotal, target); // ניצול מול התקציב (null אם אין תקציב) — לעולם לא הכנסה
     return {
       count,
-      pct,
+      pct: up == null ? 0 : up,
+      hasBudget: up != null,
+      center: up == null ? "—" : usagePctText(budTotal, target),
       total
     };
   };
@@ -8852,6 +8879,7 @@ function App() {
     cat: c,
     count: st.count,
     pct: st.pct,
+    center: st.center,
     onEdit: () => setModal({
       type: "catDetail",
       cat: c
