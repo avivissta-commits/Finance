@@ -1,77 +1,66 @@
-# הכסף שלי — העלאה ל-GitHub ול-Cloudflare Worker
+# הכסף שלי — פריסה + סנכרון ענן (מחובר)
 
-האפליקציה היא **קובץ HTML יחיד ועצמאי** (offline, ללא CDN). כל הקוד, ה-CSS וה-React
-מוטמעים בפנים. אפשר לפתוח אותה ישירות בדפדפן, לארח ב-GitHub Pages, או להגיש דרך Cloudflare Worker.
+## מה קורה עכשיו (סנכרון פעיל)
+האפליקציה **מסנכרנת בפועל** מול ה-Worker:
+```
+כתובת ה-API:  https://finance.avivissta.workers.dev/api   (מוגדר קשיח באפליקציה)
+בכל טעינה / החלפת משתמש:  GET  /api/data   (header x-sync-id = User ID של המשתמש הפעיל)
+בכל שינוי (מושהה ~0.8ש'):  PUT  /api/data   body { schema, rev, updatedAt, data }
+```
+- **סנכרון לפי משתמש:** ה-`x-sync-id` הוא ה-User ID של המשתמש הפעיל, כך שכל משתמש = מסמך נפרד ב-KV.
+- **המשתמש הפעיל נשאר מקומי** לכל מכשיר (`hakesef_active`), לא מסתנכרן.
+- **קונפליקט:** אם בשרת יש `updatedAt` חדש יותר → מאמצים את עותק השרת (last-write-wins). עריכות אופליין נדחפות כשחוזר חיבור.
+- **מקומי כגיבוי:** הנתונים תמיד נשמרים גם ב-localStorage; אם הענן לא זמין → "ממתין לחיבור", והאפליקציה ממשיכה לעבוד.
 
-## מצב הנתונים כרגע (חשוב)
-- **מקומי, מרובה־משתמשים.** כל משתמש נשמר בנפרד ב-localStorage לפי User ID קבוע:
-  - `hakesef_users`, `hakesef_active` (המשתמש הפעיל — מקומי למכשיר), `hakesef_u_<id>` (נתוני המשתמש).
-- **אין כרגע סנכרון ענן פעיל.** קוד הסנכרון קיים אבל רדום. תפקיד ה-Worker כרגע: **להגיש את האפליקציה**.
+> **חשוב:** מכיוון שמזהה המשתמש נוצר מקומית בכל מכשיר, כדי ששני מכשירים יראו את *אותו* משתמש
+> צריך שיהיה להם אותו User ID. סנכרון בין־מכשירי של משתמש מסוים (חשבון משותף) הוא שלב הרחבה
+> נוסף (למשל "התחברות עם קוד" שמאחדת User ID). כרגע: כל מכשיר מסנכרן את המשתמשים שלו לענן.
 
 ---
+
+## דרישות ב-Worker
+ה-Worker (worker.js) כבר מטפל ב-/api/data ומגיש את האפליקציה. הוא **חייב** binding ל-KV בשם `HAKESEF`:
+```bash
+wrangler kv namespace create HAKESEF
+# מדביקים את ה-id ב-wrangler.toml במקום REPLACE_WITH_YOUR_KV_NAMESPACE_ID
+```
+אם ה-KV לא מחובר → קריאות /api/* יחזירו 500 ("KV namespace HAKESEF is not bound").
 
 ## מבנה הריפו (שורש)
 ```
 repo/
-├─ index.html         ← האפליקציה (מה שמוגש כאתר)
-├─ hotzaot.html       ← עותק זהה (מקור)
-├─ worker.js          ← ה-Worker
-├─ wrangler.toml      ← הגדרות פריסה
-├─ .assetsignore      ← אילו קבצים לא להגיש כאתר
+├─ index.html      ← האפליקציה (מוגשת כאתר)
+├─ hotzaot.html    ← עותק זהה (מקור)
+├─ worker.js       ← API /api/data + הגשת האפליקציה
+├─ wrangler.toml   ← assets=".", KV=HAKESEF
+├─ .assetsignore   ← לא להגיש קבצי מקור
 └─ DEPLOY.md
 ```
-> הקבצים הסטטיים יושבים **בשורש** הריפו, ולכן ב-wrangler.toml:
-> `[assets] directory = "."`. **אין צורך בתיקיית public.**
 
----
-
-## תיקון השגיאה "public does not exist"
-זו הסיבה לכישלון: ההגדרה הצביעה על `./public` אבל אין תיקייה כזו (הקבצים בשורש).
-**התיקון כבר בוצע** בקבצים המצורפים:
-- `wrangler.toml` → `directory = "."` (השורש, שם נמצא index.html).
-- נוסף `.assetsignore` שמונע הגשה של קבצי מקור/קונפיג (worker.js, wrangler.toml וכו').
-
-פשוט החליפו את שני הקבצים האלה בריפו, ודחפו מחדש — הבנייה תעבור.
-
-> אם בכל זאת תעדיפו את המבנה עם `public/`: צרו תיקייה `public`, העבירו אליה את `index.html`,
-> ושנו בחזרה ל-`directory = "./public"`. שתי הדרכים תקינות — בחרו אחת.
-
----
-
-## אפשרות א' — GitHub (Pages), בלי Cloudflare
-1. Settings → Pages → Source: Deploy from a branch → main / (root) → Save.
-2. תוך דקה: `https://<user>.github.io/<repo>/`. (Pages מגיש את index.html מהשורש ישירות — פשוט יותר מ-Worker.)
-
-## אפשרות ב' — Cloudflare Worker
-### דרך Git (מה שניסית)
-מחברים את הריפו ב-Cloudflare (Workers & Pages → Create → Connect to Git). עם ה-`wrangler.toml`
-המתוקן (directory = "."), הבנייה תמצא את index.html בשורש ותפרוס. אין build command נדרש
-(זו אפליקציה סטטית בלי Vite/React-build).
-
-### דרך CLI (מקומית)
+## פריסה
 ```bash
 npm install -g wrangler
 wrangler login
+wrangler kv namespace create HAKESEF        # אם עוד אין; להדביק id ב-wrangler.toml
 wrangler deploy
 ```
-תקבלו `https://hakesef.<subdomain>.workers.dev`.
+או דרך חיבור ה-Git ב-Cloudflare (Workers & Pages → Connect to Git). ה-assets בשורש (directory=".").
 
-> **KV לא חובה כרגע** — נחוץ רק ל-API הסנכרון העתידי, שהאפליקציה עדיין לא קוראת לו.
-> הבלוק `[[kv_namespaces]]` מוער ב-wrangler.toml.
+## בדיקה מהירה (שהסנכרון עובד)
+פותחים את האתר, ואז ב-DevTools → Network מסננים לפי `data`:
+- בטעינה תראו **GET** ל-`.../api/data` (עם `x-sync-id`).
+- אחרי שינוי כלשהו תראו **PUT** ל-`.../api/data`.
+בדיקה ישירה של ה-API:
+```
+GET  https://finance.avivissta.workers.dev/api/health              -> { ok:true }
+GET  https://finance.avivissta.workers.dev/api/data  (x-sync-id: X) -> { empty:true } | { ...data }
+```
 
----
+## שינוי כתובת ה-API
+הכתובת מוגדרת קשיח באפליקציה (`https://finance.avivissta.workers.dev/api`). כדי לשנות —
+עורכים את הקבוע `DEFAULT_API` במקור ובונים מחדש, או שומרים `localStorage.hakesef_sync = {"apiBase":"..."}`
+לעקיפה בלי בנייה מחדש.
 
-## הבהרה: build או לא?
-זו **אפליקציה סטטית בלי שלב build** (אין Vite/React-build). לכן:
-- Build command: *ריק* (או `:`).
-- Output / assets directory: התיקייה שבה נמצא `index.html` — כאן זה **השורש** (`.`).
-- אם היה זה פרויקט Vite/React, אז היה build command `npm run build` ו-assets מ-`dist`. אצלנו לא.
-
-## סנכרון ענן עתידי
-ה-Worker כולל כבר API מגובה-KV (`GET/PUT /api/data`, `GET /api/health`). כשנחבר סנכרון:
-הנתונים יסתנכרנו **לפי User ID**, והמשתמש הפעיל יישאר **מקומי לכל מכשיר**. להפעלה: יוצרים KV
-(`wrangler kv namespace create HAKESEF`), מדביקים id ב-wrangler.toml ומסירים את ההערה.
-
-## עדכון גרסה (בלי לאבד נתונים)
-מעדכנים את `index.html` ודוחפים ל-Git (או `wrangler deploy`). נתוני המשתמשים ב-localStorage
-של כל מכשיר נשארים כמו שהם.
+## הערות אבטחה
+- ה-`x-sync-id` (User ID) הוא המפתח לנתוני אותו משתמש; ה-Worker שומר ב-KV רק את ה-SHA-256 שלו.
+- ל-KV אין הצפנה מקצה-לקצה. לפרטיות חזקה — אפשר להוסיף הצפנת client-side או auth אמיתי (הרחבה עתידית).

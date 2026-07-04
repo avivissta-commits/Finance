@@ -1006,6 +1006,7 @@ function relTime(ms) {
    הענן = מקור האמת · localStorage = קאש/גיבוי מקומי בלבד.
    seed רץ רק אם אין נתונים בענן ואין מקומית. כל שינוי נדחף לענן (debounced),
    ואם אין רשת — נשמר מקומית ומסתנכרן כשחוזר חיבור. */
+const DEFAULT_API = "https://finance.avivissta.workers.dev/api";
 function syncCfg() {
   try {
     return JSON.parse(localStorage.getItem(SYNC_KEY) || "{}") || {};
@@ -1021,47 +1022,44 @@ function setSyncCfg(c) {
 function apiBase() {
   const c = syncCfg();
   if (c.apiBase) return String(c.apiBase).replace(/\/+$/, "");
-  if (typeof location !== "undefined" && /^https?:$/.test(location.protocol)) return location.origin + "/api";
-  return null; // file:// — אין ענן, מצב מקומי בלבד
+  return DEFAULT_API;
 }
 function syncEnabled() {
-  const c = syncCfg();
-  return !!(c.syncId && apiBase());
+  return !!apiBase();
 }
-function loadMeta() {
+const metaKey = id => "hakesef_meta_" + id;
+function loadMeta(id) {
   try {
-    return JSON.parse(localStorage.getItem(META_KEY) || "{}") || {};
+    return JSON.parse(localStorage.getItem(metaKey(id)) || "{}") || {};
   } catch (_) {
     return {};
   }
 }
-function saveMeta(m) {
+function saveMeta(id, m) {
   try {
-    localStorage.setItem(META_KEY, JSON.stringify(m || {}));
+    localStorage.setItem(metaKey(id), JSON.stringify(m || {}));
   } catch (_) {}
 }
-async function cloudGet() {
-  const base = apiBase(),
-    c = syncCfg();
-  if (!base || !c.syncId) throw new Error("no-sync");
+async function cloudGet(syncId) {
+  const base = apiBase();
+  if (!base || !syncId) throw new Error("no-sync");
   const r = await fetch(base + "/data", {
     headers: {
-      "x-sync-id": c.syncId
+      "x-sync-id": syncId
     },
     cache: "no-store"
   });
   if (!r.ok) throw new Error("http " + r.status);
   return r.json(); // {empty:true} או {schema,rev,updatedAt,data}
 }
-async function cloudPut(env) {
-  const base = apiBase(),
-    c = syncCfg();
-  if (!base || !c.syncId) throw new Error("no-sync");
+async function cloudPut(syncId, env) {
+  const base = apiBase();
+  if (!base || !syncId) throw new Error("no-sync");
   const r = await fetch(base + "/data", {
     method: "PUT",
     headers: {
       "content-type": "application/json",
-      "x-sync-id": c.syncId
+      "x-sync-id": syncId
     },
     body: JSON.stringify(env)
   });
@@ -1087,212 +1085,132 @@ async function cloudPing() {
   }
 }
 
-/* Hook: מנהל bootstrap (משיכה ראשונית), דחיפה בכל שינוי, ריטריי כשחוזרת רשת */
-function useCloudSync(data, setData, onRemote) {
-  const [sync, setSync] = useState(() => ({
-    status: syncEnabled() ? "connecting" : "off",
-    at: null,
-    error: null
-  }));
-  const [booting, setBooting] = useState(() => {
-    try {
-      return syncEnabled() && !localStorage.getItem(KEY);
-    } catch (_) {
-      return false;
-    }
-  });
-  const revRef = useRef(loadMeta().rev || 0);
-  const skipPush = useRef(true);
-  const pushTimer = useRef(null);
-  const dirtyRef = useRef(false);
+/* Hook: מסנכרן את המשתמש הפעיל לפי ה-User ID שלו.
+   - טעינה/החלפת משתמש → GET /api/data (x-sync-id = userId). ענן חדש יותר → מאמצים; אחרת דוחפים מקומי.
+   - כל שינוי → PUT /api/data (מושהה). קונפליקט (409) → מאמצים את עותק השרת. */
+function useCloudSync(activeId, data, setData, onStatus) {
   const dataRef = useRef(data);
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
-  const pushNow = async d => {
-    if (!syncEnabled()) return;
-    const rev = (revRef.current || 0) + 1,
-      now = Date.now();
-    try {
-      setSync(s => ({
-        ...s,
-        status: "saving"
-      }));
-      const res = await cloudPut({
-        schema: SCHEMA,
-        rev,
-        updatedAt: now,
-        data: d
-      });
-      revRef.current = res.rev || rev;
-      saveMeta({
-        rev: revRef.current,
-        updatedAt: res.updatedAt || now
-      });
-      dirtyRef.current = false;
-      setSync({
-        status: "synced",
-        at: Date.now(),
-        error: null
-      });
-    } catch (e) {
-      if (e.message === "conflict" && e.server && e.server.data) {
-        skipPush.current = true;
-        const m = migrate(e.server.data);
-        setData(m);
-        revRef.current = e.server.rev || rev;
-        saveMeta({
-          rev: revRef.current,
-          updatedAt: e.server.updatedAt || now
-        });
-        try {
-          localStorage.setItem(KEY, JSON.stringify(m));
-        } catch (_) {}
-        setSync({
-          status: "synced",
-          at: Date.now(),
-          error: null
-        });
-        onRemote && onRemote("סונכרן ממכשיר אחר");
-      } else {
-        dirtyRef.current = true;
-        setSync({
-          status: "offline",
-          at: null,
-          error: String(e.message || e)
-        });
-      }
-    }
-  };
+  const pulledFor = useRef(null);
+  const pushTimer = useRef(null);
+  const status = s => onStatus && onStatus(s);
   useEffect(() => {
-    // bootstrap פעם אחת
+    // PULL בכל החלפת משתמש/טעינה
     let alive = true;
-    if (!syncEnabled()) {
-      setSync({
+    if (!activeId || !syncEnabled()) {
+      status({
         status: "off"
       });
-      setBooting(false);
       return;
     }
+    status({
+      status: "connecting"
+    });
     (async () => {
       try {
-        const env = await cloudGet();
+        const env = await cloudGet(activeId);
         if (!alive) return;
         if (env && env.data && !env.empty) {
-          // בענן יש נתונים → מקור האמת
-          skipPush.current = true;
-          const m = migrate(env.data);
-          setData(m);
-          revRef.current = env.rev || 1;
-          saveMeta({
-            rev: revRef.current,
-            updatedAt: env.updatedAt || Date.now()
-          });
-          try {
-            localStorage.setItem(KEY, JSON.stringify(m));
-          } catch (_) {}
-          setSync({
-            status: "synced",
-            at: Date.now(),
-            error: null
-          });
+          const localUpdated = loadMeta(activeId).updatedAt || 0;
+          if ((+env.updatedAt || 0) > localUpdated) {
+            // בענן חדש ממש → מאמצים
+            const m = migrate(env.data);
+            setData(m);
+            try {
+              localStorage.setItem(userKey(activeId), JSON.stringify(m));
+            } catch (_) {}
+            saveMeta(activeId, {
+              rev: env.rev || 1,
+              updatedAt: env.updatedAt || Date.now()
+            });
+            status({
+              status: "synced",
+              at: Date.now()
+            });
+          } else {
+            // מקומי חדש יותר → דוחפים
+            await pushNow(activeId, dataRef.current);
+          }
         } else {
-          // הענן ריק → מעלים את המקומי/seed פעם ראשונה
-          const rev = (loadMeta().rev || 0) + 1,
-            now = Date.now();
-          const res = await cloudPut({
-            schema: SCHEMA,
-            rev,
-            updatedAt: now,
-            data: dataRef.current
-          });
-          revRef.current = res.rev || rev;
-          saveMeta({
-            rev: revRef.current,
-            updatedAt: res.updatedAt || now
-          });
-          setSync({
-            status: "synced",
-            at: Date.now(),
-            error: null
-          });
+          // ענן ריק → מזריעים ממקומי
+          await pushNow(activeId, dataRef.current);
         }
       } catch (e) {
-        if (alive) setSync({
+        if (alive) status({
           status: "offline",
-          at: null,
-          error: String(e.message || e)
+          error: String(e && e.message || e)
         });
       } finally {
-        if (alive) setBooting(false);
+        if (alive) pulledFor.current = activeId;
       }
     })();
     return () => {
       alive = false;
     };
-  }, []);
-  useEffect(() => {
-    // כתיבה לקאש + דחיפה מושהית לענן
+  }, [activeId]);
+  const pushNow = async (id, d) => {
+    if (!syncEnabled() || !id) return;
+    const rev = (loadMeta(id).rev || 0) + 1,
+      now = Date.now();
     try {
-      localStorage.setItem(KEY, JSON.stringify(data));
-    } catch (_) {}
-    if (skipPush.current) {
-      skipPush.current = false;
-      return;
+      status({
+        status: "saving"
+      });
+      const res = await cloudPut(id, {
+        schema: SCHEMA,
+        rev,
+        updatedAt: now,
+        data: d
+      });
+      saveMeta(id, {
+        rev: res.rev || rev,
+        updatedAt: res.updatedAt || now
+      });
+      status({
+        status: "synced",
+        at: Date.now()
+      });
+    } catch (e) {
+      if (e && e.message === "conflict" && e.server && e.server.data) {
+        const m = migrate(e.server.data);
+        setData(m);
+        try {
+          localStorage.setItem(userKey(id), JSON.stringify(m));
+        } catch (_) {}
+        saveMeta(id, {
+          rev: e.server.rev || rev,
+          updatedAt: e.server.updatedAt || now
+        });
+        status({
+          status: "synced",
+          at: Date.now()
+        });
+      } else status({
+        status: "offline",
+        error: String(e && e.message || e)
+      });
     }
-    if (!syncEnabled()) return;
+  };
+  useEffect(() => {
+    // PUSH מושהה בכל שינוי (רק אחרי שה-PULL של המשתמש הנוכחי הסתיים)
+    if (!activeId || !syncEnabled()) return;
+    if (pulledFor.current !== activeId) return;
     if (pushTimer.current) clearTimeout(pushTimer.current);
-    pushTimer.current = setTimeout(() => pushNow(dataRef.current), 700);
-  }, [data]);
+    pushTimer.current = setTimeout(() => pushNow(activeId, dataRef.current), 800);
+    return () => {
+      if (pushTimer.current) clearTimeout(pushTimer.current);
+    };
+  }, [data, activeId]);
   useEffect(() => {
     // ריטריי כשחוזרת רשת
     const on = () => {
-      if (syncEnabled() && dirtyRef.current) pushNow(dataRef.current);
+      if (activeId && syncEnabled()) pushNow(activeId, dataRef.current);
     };
     window.addEventListener("online", on);
     return () => window.removeEventListener("online", on);
-  }, []);
-  const forcePull = async () => {
-    if (!syncEnabled()) return;
-    try {
-      setSync(s => ({
-        ...s,
-        status: "connecting"
-      }));
-      const env = await cloudGet();
-      if (env && env.data && !env.empty) {
-        skipPush.current = true;
-        const m = migrate(env.data);
-        setData(m);
-        revRef.current = env.rev || 1;
-        saveMeta({
-          rev: revRef.current,
-          updatedAt: env.updatedAt || Date.now()
-        });
-        try {
-          localStorage.setItem(KEY, JSON.stringify(m));
-        } catch (_) {}
-      }
-      setSync({
-        status: "synced",
-        at: Date.now(),
-        error: null
-      });
-    } catch (e) {
-      setSync({
-        status: "offline",
-        at: null,
-        error: String(e.message || e)
-      });
-    }
-  };
-  const forcePush = () => pushNow(dataRef.current);
-  return {
-    sync,
-    booting,
-    forcePull,
-    forcePush
-  };
+  }, [activeId]);
 }
 
 /* ============================ הכנסה לפי חודש ============================ */
@@ -5891,6 +5809,7 @@ function SwitchUserSheet({
 function UserSheet({
   profile,
   snapshot,
+  sync,
   savedAt,
   saveOk,
   onSaveProfile,
@@ -6003,9 +5922,16 @@ function UserSheet({
   })), /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] mt-2.5",
     style: {
-      color: saveOk ? "#9aa79f" : AMBER
+      color: sync && sync.status === "offline" ? AMBER : "#9aa79f"
     }
-  }, saveOk ? `נשמר ${relTime(savedAt)}` : "⚠️ השמירה האחרונה נכשלה")), /*#__PURE__*/React.createElement("div", {
+  }, (() => {
+    const st = sync && sync.status || "connecting";
+    if (st === "synced") return `מסונכרן ${relTime(sync && sync.at || savedAt)}`;
+    if (st === "saving") return "מסנכרן…";
+    if (st === "connecting") return "מתחבר…";
+    if (st === "off") return saveOk ? `נשמר ${relTime(savedAt)}` : "⚠️ השמירה נכשלה";
+    return "⚠️ ממתין לחיבור";
+  })())), /*#__PURE__*/React.createElement("div", {
     className: "rounded-2xl px-4 py-1",
     style: {
       ...field,
@@ -7592,6 +7518,10 @@ function App() {
   const [enterBase, setEnterBase] = useState(0); // השהיה בסיסית (משתמש≈220, חודש=0)
   const [savedAt, setSavedAt] = useState(() => Date.now());
   const [saveOk, setSaveOk] = useState(true);
+  const [syncStatus, setSyncStatus] = useState({
+    status: "connecting"
+  });
+  useCloudSync(activeId, data, setData, setSyncStatus);
   const [ym, setYm] = useState(todayYM);
   const [pageDir, setPageDir] = useState(0);
   const [closing, setClosing] = useState(false);
@@ -8554,6 +8484,7 @@ function App() {
   }), modal?.type === "user" && /*#__PURE__*/React.createElement(UserSheet, {
     profile: data.profile,
     snapshot: profileSnapshot,
+    sync: syncStatus,
     savedAt: savedAt,
     saveOk: saveOk,
     onSaveProfile: patch => {

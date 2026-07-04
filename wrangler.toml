@@ -2,16 +2,15 @@ name = "hakesef"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# הקבצים הסטטיים (index.html) יושבים בשורש הריפו, לכן ה-directory מצביע לשורש.
-# קובץ .assetsignore (בשורש) מוודא שקבצי המקור/קונפיג לא יוגשו כאתר.
+# הקבצים הסטטיים (index.html) בשורש הריפו. .assetsignore מונע הגשת קבצי מקור.
 [assets]
 directory = "."
 binding = "ASSETS"
 
-# ---- אחסון לסנכרון ענן (לא חובה כרגע) ----
-# האפליקציה כרגע מקומית ואינה משתמשת ב-API הסנכרון, לכן הבלוק הזה מוער.
-# כשתרצו להפעיל סנכרון: הריצו `wrangler kv namespace create HAKESEF`,
-# הדביקו את ה-id, והסירו את סימני ההערה.
-# [[kv_namespaces]]
-# binding = "HAKESEF"
-# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+# ---- אחסון הסנכרון (חובה עכשיו) ----
+# האפליקציה מסנכרנת דרך /api/data, ולכן ה-Worker חייב binding ל-KV בשם HAKESEF.
+# יצירה חד־פעמית:  wrangler kv namespace create HAKESEF
+# הדביקו את ה-id שהתקבל במקום REPLACE_WITH_YOUR_KV_NAMESPACE_ID.
+[[kv_namespaces]]
+binding = "HAKESEF"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
