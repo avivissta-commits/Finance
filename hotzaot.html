@@ -1104,10 +1104,9 @@ function strHash(s) {
 function userSyncId(user) {
   if (user && user.syncId) return String(user.syncId); // מזהה מפורש (אם הוגדר) — גובר
   const name = (user && user.name || "").trim();
-  if (SYNC_ALIASES[name]) return SYNC_ALIASES[name]; // שמות מוכרים → מזהה קריא וקבוע
+  if (SYNC_ALIASES[name]) return "user_" + SYNC_ALIASES[name]; // אביב→user_aviv, יוסי→user_yossi
   const ascii = name.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const h = strHash(name.toLowerCase()); // דטרמיניסטי מהשם → זהה בכל מכשיר
-  return ascii ? ascii + "-" + h : "u-" + h;
+  return "user_" + (ascii ? ascii + "_" : "") + strHash(name.toLowerCase()); // דטרמיניסטי מהשם, ≥6 תווים
 }
 
 /* Hook: מסנכרן את המשתמש הפעיל לפי syncId קבוע (נגזר מהשם), זהה בכל המכשירים.
