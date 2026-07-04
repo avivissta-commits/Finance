@@ -1652,14 +1652,15 @@ function Ring({
   onClick,
   animKey,
   block,
-  active
+  active,
+  fsScale = 1
 }) {
   const p = Math.max(0, Math.min(pct, 130));
   const r = (size - stroke) / 2,
     c = 2 * Math.PI * r;
   const off = c - Math.min(p, 100) / 100 * c;
   const cStr = center != null ? String(center) : pct >= 1000 ? "999%+" : Math.round(pct) + "%";
-  const fs = size >= 70 ? cStr.length >= 7 ? 11.5 : cStr.length >= 6 ? 12.5 : cStr.length >= 5 ? 13.5 : 15 : cStr.length >= 6 ? 10.5 : 13;
+  const fs = (size >= 70 ? cStr.length >= 7 ? 11.5 : cStr.length >= 6 ? 12.5 : cStr.length >= 5 ? 13.5 : 15 : cStr.length >= 6 ? 10.5 : 13) * fsScale;
   const anim = animKey != null ? "ringtext .38s cubic-bezier(.22,1,.36,1) both" : undefined;
   const glow = active ? typeof color === "string" && color.startsWith("#") ? color + "22" : "rgba(47,111,237,0.14)" : "transparent";
   const Tag = onClick ? "button" : "div";
@@ -1852,13 +1853,176 @@ function RollNumber({
     }
   }, ch)));
 }
+function ForecastDetail({
+  data,
+  calc,
+  ym,
+  onClose,
+  onIncome,
+  onGoal
+}) {
+  const POS = "#17a05e",
+    NEG = "#b42318",
+    FUT = "#f59e0b",
+    BUD = "#2f6fed",
+    SAV = "#6d4de0";
+  const income = calc.income || 0;
+  const actual = calc.actual || 0;
+  const overspend = calc.overspend || 0;
+  const committed = calc.committed || 0;
+  const projected = calc.projected || 0;
+  const residual = Math.max(0, committed - actual - overspend);
+  let remBudget = (calc.budgets || []).filter(b => !b.fixed).reduce((s, b) => s + Math.max(0, (+b.target || 0) - (calc.usedByBudget[b.id] || 0)), 0);
+  remBudget = Math.max(0, Math.min(remBudget, residual));
+  const plannedExp = residual - remBudget;
+  const savingsGoal = +data.savingsGoal || 0;
+  const savingsImpact = Math.min(savingsGoal, Math.max(0, projected));
+  const finalLeft = projected - savingsImpact;
+  const sources = typeof incomeSourcesFor === "function" ? incomeSourcesFor(data, ym) : [];
+  const incomeSub = sources.length > 1 ? sources.map(x => ({
+    name: x.name || "הכנסה",
+    amount: +x.amount || 0
+  })) : null;
+  const Row = ({
+    dot,
+    label,
+    value,
+    color,
+    minus,
+    strong,
+    onTap,
+    sub
+  }) => /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(onTap ? "button" : "div", {
+    onClick: onTap || undefined,
+    className: "w-full flex items-center justify-between py-2.5 text-[14px]" + (onTap ? " transition-transform active:scale-[0.99]" : "")
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-2 min-w-0"
+  }, dot ? /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] shrink-0"
+  }, dot) : null, /*#__PURE__*/React.createElement("span", {
+    className: (strong ? "font-bold text-[14.5px]" : "font-medium") + " text-stone-600 truncate"
+  }, label), onTap ? /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-300 text-[14px] shrink-0"
+  }, "‹") : null), /*#__PURE__*/React.createElement("span", {
+    className: (strong ? "font-extrabold text-[16px]" : "font-bold") + " tabular-nums shrink-0",
+    style: {
+      color: color
+    }
+  }, minus ? "− " : "", shekel(Math.abs(value)))), sub ? /*#__PURE__*/React.createElement("div", {
+    className: "pr-6 pb-1.5 space-y-1"
+  }, sub.map((x, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "flex items-center justify-between text-[12.5px] text-stone-400"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "truncate"
+  }, x.name), /*#__PURE__*/React.createElement("span", {
+    className: "tabular-nums"
+  }, shekel(x.amount))))) : null);
+  const Sep = () => /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 1,
+      background: "rgba(122,134,158,0.18)",
+      margin: "7px 0"
+    }
+  });
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: "פירוט התחזית החודשית",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center pt-1 pb-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12.5px] text-stone-500 mb-1.5"
+  }, "נשאר בסוף החודש"), /*#__PURE__*/React.createElement("div", {
+    className: "font-extrabold text-[34px] leading-none tabular-nums",
+    style: {
+      color: finalLeft < 0 ? NEG : POS
+    }
+  }, (finalLeft < 0 ? "− " : "") + shekel(Math.abs(finalLeft))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-400 mt-2.5 leading-relaxed px-3"
+  }, "התחזית מבוססת על ההכנסות, התקציבים, ההוצאות והיעדים שהוגדרו.")), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-1.5",
+    style: {
+      background: "rgba(122,134,158,0.06)"
+    }
+  }, Row({
+    dot: "🟢",
+    label: "הכנסות החודש",
+    value: income,
+    color: POS,
+    onTap: onIncome,
+    sub: incomeSub
+  }), Row({
+    dot: "🔴",
+    label: "הוצאות שכבר בוצעו",
+    value: actual,
+    color: NEG,
+    minus: actual > 0
+  }), Row({
+    dot: "🟠",
+    label: "הוצאות מתוכננות שטרם בוצעו",
+    value: plannedExp,
+    color: FUT,
+    minus: plannedExp > 0
+  }), Row({
+    dot: "🔴",
+    label: "חריגות מתקציבים",
+    value: overspend,
+    color: NEG,
+    minus: overspend > 0
+  }), Row({
+    dot: "🔵",
+    label: "תקציבים שנותרו לניצול",
+    value: remBudget,
+    color: BUD,
+    minus: remBudget > 0
+  }), /*#__PURE__*/React.createElement(Sep, null), Row({
+    dot: "🟢",
+    label: "יתרה צפויה לפני יעד החיסכון",
+    value: projected,
+    color: projected < 0 ? NEG : POS,
+    minus: projected < 0,
+    strong: true
+  }), Row({
+    dot: "🟣",
+    label: "יעד חיסכון",
+    value: savingsGoal,
+    color: SAV,
+    onTap: onGoal
+  }), Row({
+    dot: "🟣",
+    label: "השפעת יעד החיסכון",
+    value: savingsImpact,
+    color: SAV,
+    minus: savingsImpact > 0
+  }), /*#__PURE__*/React.createElement(Sep, null), Row({
+    dot: "",
+    label: "נשאר בפועל לסוף החודש",
+    value: finalLeft,
+    color: finalLeft < 0 ? NEG : POS,
+    minus: finalLeft < 0,
+    strong: true
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-3 mt-3 mb-1",
+    style: {
+      background: "rgba(47,111,237,0.07)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[13.5px] mb-1.5",
+    style: {
+      color: BUD
+    }
+  }, "איך החישוב מתבצע?"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12.5px] text-stone-500 leading-relaxed"
+  }, "מהכנסות החודש מפחיתים את ההוצאות שכבר בוצעו, ההוצאות העתידיות המתוכננות, החריגות מהתקציבים והתקציבים שעדיין שמורים לניצול. מהתוצאה מפחיתים את יעד החיסכון — וכך מתקבל הסכום שיישאר בפועל בסוף החודש.")));
+}
 function MonthCard({
   calc,
   savingsGoal,
   mode,
   onMode,
   onEditIncome,
-  onEditGoal
+  onEditGoal,
+  onForecast
 }) {
   const actual = mode === "actual";
   const over = actual ? calc.remainingNow < 0 : calc.projected < 0;
@@ -1952,7 +2116,8 @@ function MonthCard({
   }, r.v < 0 && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: Math.abs(r.v)
   }), /*#__PURE__*/React.createElement("span", null, "₪"))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "rounded-2xl px-3.5 py-3 flex items-center justify-between w-full",
+    onClick: onForecast,
+    className: "rounded-2xl px-3.5 py-3 flex items-center justify-between w-full cursor-pointer transition-transform active:scale-[0.99]",
     style: {
       background: heroGrad,
       transition: "background .35s ease",
@@ -2455,6 +2620,7 @@ function Carousel({
   const ext = [pages[n - 1], ...pages, pages[0]]; // שכפולים ללולאה
 
   const down = e => {
+    if (e.pointerType === "touch") return;
     dragging.current = true;
     movedRef.current = false;
     captured.current = false;
@@ -2493,6 +2659,23 @@ function Carousel({
     setDrag(0);
     setIdx(ni);
   };
+  const tStart = e => {
+    const t = e.touches[0];
+    if (t) down({
+      clientX: t.clientX
+    });
+  };
+  const tMove = e => {
+    const t = e.touches[0];
+    if (t) move({
+      clientX: t.clientX,
+      pointerId: 1,
+      currentTarget: {
+        setPointerCapture() {}
+      }
+    });
+  };
+  const tEnd = () => up();
   const onEnd = () => {
     if (idx === 0) {
       setAnim(false);
@@ -2534,7 +2717,11 @@ function Carousel({
     onPointerMove: move,
     onPointerUp: up,
     onPointerLeave: up,
-    onPointerCancel: up
+    onPointerCancel: up,
+    onTouchStart: tStart,
+    onTouchMove: tMove,
+    onTouchEnd: tEnd,
+    onTouchCancel: tEnd
   }, /*#__PURE__*/React.createElement("div", {
     style: trackStyle,
     onTransitionEnd: onEnd
@@ -7313,7 +7500,8 @@ function CategoryCard({
     size: 46,
     stroke: 5,
     color: pct > 0 ? GREEN : "rgba(122,134,158,0.35)",
-    center: center
+    center: center,
+    fsScale: 0.82
   }));
 }
 function CategoryDetail({
@@ -8494,6 +8682,7 @@ function App() {
     c,
     st: catStats(c)
   })).sort((a, b) => b.st.total - a.st.total);
+  const catGrandTotal = sortedCats.reduce((s, x) => s + x.st.total, 0);
   const filterActive = filter.cat != null || filter.type !== "all";
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -8557,6 +8746,9 @@ function App() {
     }),
     onEditGoal: () => setModal({
       type: "goal"
+    }),
+    onForecast: () => setModal({
+      type: "forecastDetail"
     })
   })), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -8767,7 +8959,7 @@ function App() {
         }),
         className: "shrink-0 rounded-full px-3 h-8 text-[12.5px] font-bold transition-transform active:scale-95 mt-0.5",
         style: {
-          background: "rgba(47,111,237,0.14)",
+          background: "transparent",
           color: GREEN
         }
       }, "+ תקציב")), /*#__PURE__*/React.createElement("div", {
@@ -8887,8 +9079,8 @@ function App() {
     key: c.id,
     cat: c,
     count: st.count,
-    pct: st.pct,
-    center: st.center,
+    pct: catGrandTotal > 0 ? st.total / catGrandTotal * 100 : 0,
+    center: (catGrandTotal > 0 ? Math.round(st.total / catGrandTotal * 100) : 0) + "%",
     onEdit: () => setModal({
       type: "catDetail",
       cat: c
@@ -9329,6 +9521,19 @@ function App() {
       type: "budgetForm"
     }),
     onClose: closeModal
+  }), modal?.type === "forecastDetail" && /*#__PURE__*/React.createElement(ForecastDetail, {
+    data: data,
+    calc: calc,
+    ym: ym,
+    onClose: closeModal,
+    onIncome: () => setModal({
+      type: "income",
+      back: "forecastDetail"
+    }),
+    onGoal: () => setModal({
+      type: "goal",
+      back: "forecastDetail"
+    })
   }), modal?.type === "budgetDetail" && /*#__PURE__*/React.createElement(BudgetDetail, {
     budget: (data.budgets || []).find(b => b.id === modal.budget.id) || modal.budget,
     data: data,
