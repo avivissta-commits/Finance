@@ -1,0 +1,17 @@
+name = "hakesef"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# האפליקציה עצמה (index.html) מוגשת מהתיקייה ./public
+# שים את הקובץ hotzaot.html בשם public/index.html
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# ---- אחסון לסנכרון ענן (לא חובה כרגע) ----
+# האפליקציה כרגע מקומית ואינה משתמשת ב-API הסנכרון, לכן הבלוק הזה מוער.
+# כשתרצו להפעיל סנכרון: הריצו `wrangler kv namespace create HAKESEF`,
+# הדביקו את ה-id, והסירו את סימני ההערה.
+# [[kv_namespaces]]
+# binding = "HAKESEF"
+# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
