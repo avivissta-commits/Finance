@@ -7951,9 +7951,9 @@ function App() {
       label: "לקראת חריגה",
       color: AMBER
     };else status = {
-      emoji: "🔵",
+      emoji: "🟢",
       label: "תקין",
-      color: GREEN
+      color: "#17a05e"
     };
     const {
       y,
@@ -8727,7 +8727,7 @@ function App() {
       const spentBud = [...fixedB, ...varB].reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
       const catSpent = spentBud + recTotal + plainTotal;
       const catOver = [...fixedB, ...varB].reduce((s, b) => s + Math.max(0, (calc.usedByBudget[b.id] || 0) - (+b.target || 0)), 0);
-      const desc = budCount > 0 ? `${budCount} תקציבים · ${shekel(catTotal)}${catOver > 0 ? ` · חריגות ${shekel(catOver)}` : ""} · סה״כ ${shekel(catSpent)}` : `${recUnb.length + plainUnb.length} הוצאות · ${shekel(money)}`;
+      const desc = budCount > 0 ? `${budCount} תקציבים · ${shekel(catTotal)}${catOver > 0 ? ` · חריגות ${shekel(catOver)}` : ""} · יצא בפועל ${shekel(catSpent)}` : `${recUnb.length + plainUnb.length} הוצאות · ${shekel(money)}`;
       const divider = {
         borderTop: "1px solid rgba(122,134,158,0.13)"
       };
