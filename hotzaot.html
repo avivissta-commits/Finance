@@ -2538,12 +2538,14 @@ function RingsCarousel({
 }) {
   const ins = budgetInsights(calc, ym);
   const clip = s => s.length > 10 ? s.slice(0, 9) + "…" : s;
+  const hasInc = (calc.income || 0) > 0;
   const inc = calc.income || 1;
+  const shortAmt = n => n >= 1000 ? Math.round(n / 100) / 10 + "k₪" : Math.round(n) + "₪";
   const cats = data.categories || [];
   const ub = calc.unbudgeted;
 
   // עמוד 1 — תובנות (מה לעשות עכשיו)
-  const oppR = ins.opp ? ins.opp.ratio > 0 ? ins.opp.ratio : ins.opp.used / inc : 0;
+  const oppR = ins.opp ? ins.opp.ratio > 0 ? ins.opp.ratio : hasInc ? ins.opp.used / inc : 0 : 0;
   const page1 = [ins.closest ? {
     pct: Math.min(100, ins.closest.ratio * 100),
     center: Math.round(ins.closest.ratio * 100) + "%",
@@ -2573,9 +2575,9 @@ function RingsCarousel({
     value: "לצמצום",
     open: null
   }, ub > 0 ? {
-    pct: Math.min(100, ub / inc * 100),
-    center: Math.round(ub / inc * 100) + "%",
-    color: ub / inc < 0.05 ? AMBER : RED,
+    pct: hasInc ? Math.min(100, ub / inc * 100) : 100,
+    center: hasInc ? Math.round(ub / inc * 100) + "%" : shortAmt(ub),
+    color: hasInc && ub / inc < 0.05 ? AMBER : RED,
     label: "🧾 לא מתוקצב",
     value: "דורש שיוך",
     open: "unbudgeted"
@@ -2619,7 +2621,7 @@ function RingsCarousel({
     const budUsed = bs.reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
     const unbUsed = calc.active.filter(e => !e.budgetId && e.catId === c.id).reduce((s, e) => s + (+e.amount || 0), 0);
     const used = budUsed + unbUsed;
-    const ratio = inc > 0 ? used / inc : 0; // כל ההוצאות בקטגוריה כאחוז מההכנסה
+    const ratio = hasInc ? used / inc : 0; // כל ההוצאות בקטגוריה כאחוז מההכנסה
     return {
       c,
       used,
@@ -2628,13 +2630,14 @@ function RingsCarousel({
   }).filter(x => x.used > 0).sort((a, b) => b.used - a.used).slice(0, 3);
   const page3 = catStats.length ? catStats.map(({
     c,
-    ratio
+    ratio,
+    used
   }) => ({
-    pct: Math.min(100, ratio * 100),
-    center: Math.round(ratio * 100) + "%",
+    pct: hasInc ? Math.min(100, ratio * 100) : 100,
+    center: hasInc ? Math.round(ratio * 100) + "%" : shortAmt(used),
     color: GREEN,
     label: `${c.emoji} ${clip(c.name)}`,
-    value: "מההכנסה",
+    value: hasInc ? "מההכנסה" : "בקטגוריה",
     open: {
       cat: c
     }
