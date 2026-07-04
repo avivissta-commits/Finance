@@ -33,6 +33,7 @@
     @keyframes cardInX { from{opacity:0; transform:translateX(-34px)} to{opacity:1; transform:none} }
     @keyframes staggerUp { from{opacity:0; transform:translateY(10px)} to{opacity:1; transform:translateY(0)} }
     @keyframes ringtext { from{opacity:0; transform:translateY(-7px)} to{opacity:1; transform:translateY(0)} }
+    @keyframes warnPulse { 0%,100%{transform:scale(1)} 45%{transform:scale(1.14)} 70%{transform:scale(1.02)} }
     @keyframes cardOut { from{opacity:1; transform:none} to{opacity:0; transform:translateY(6px) scale(.98)} }
     @keyframes monthIn { from{opacity:0; transform:translateX(var(--mx,12px))} to{opacity:1; transform:translateX(0)} }
     @keyframes popIn { from{transform:scale(.94);opacity:0} to{transform:scale(1);opacity:1} }
@@ -1485,6 +1486,18 @@ function ymTitle(ym) {
     year: "numeric"
   }).format(new Date(p.y, p.m - 1, 1));
 }
+/* האם הוצאה מופיעה בחודש נתון (מודע לחזרתיות) — זהה ללוגיקה שבחישוב */
+function expAppearsIn(e, ym) {
+  if (e && e.recur && +e.recur.freq) {
+    const di = ymIndex(ym) - ymIndex(e.ym);
+    return di >= 0 && di % Math.max(1, +e.recur.freq) === 0;
+  }
+  return e && e.ym === ym;
+}
+/* סך ההוצאות המשויכות לתקציב בחודש נתון */
+function budgetUsedFor(expenses, budgetId, ym) {
+  return (expenses || []).filter(x => x.budgetId === budgetId && expAppearsIn(x, ym)).reduce((s, x) => s + (+x.amount || 0), 0);
+}
 function incomeApplies(src, ym) {
   const sy = src.ym || (isISO(src.date) ? src.date.slice(0, 7) : todayYM());
   if (src.recur && +src.recur.freq) {
@@ -2540,7 +2553,7 @@ function RingsCarousel({
   const clip = s => s.length > 10 ? s.slice(0, 9) + "…" : s;
   const hasInc = (calc.income || 0) > 0;
   const inc = calc.income || 1;
-  const shortAmt = n => n >= 1000 ? Math.round(n / 100) / 10 + "k₪" : Math.round(n) + "₪";
+  const pctTxt = frac => hasInc ? Math.round(frac * 100) + "%" : "—";
   const cats = data.categories || [];
   const ub = calc.unbudgeted;
 
@@ -2575,9 +2588,9 @@ function RingsCarousel({
     value: "לצמצום",
     open: null
   }, ub > 0 ? {
-    pct: hasInc ? Math.min(100, ub / inc * 100) : 100,
-    center: hasInc ? Math.round(ub / inc * 100) + "%" : shortAmt(ub),
-    color: hasInc && ub / inc < 0.05 ? AMBER : RED,
+    pct: hasInc ? Math.min(100, ub / inc * 100) : 0,
+    center: pctTxt(ub / inc),
+    color: hasInc ? ub / inc < 0.05 ? AMBER : RED : "#c7cfc9",
     label: "🧾 לא מתוקצב",
     value: "דורש שיוך",
     open: "unbudgeted"
@@ -2630,14 +2643,13 @@ function RingsCarousel({
   }).filter(x => x.used > 0).sort((a, b) => b.used - a.used).slice(0, 3);
   const page3 = catStats.length ? catStats.map(({
     c,
-    ratio,
-    used
+    ratio
   }) => ({
-    pct: hasInc ? Math.min(100, ratio * 100) : 100,
-    center: hasInc ? Math.round(ratio * 100) + "%" : shortAmt(used),
-    color: GREEN,
+    pct: hasInc ? Math.min(100, ratio * 100) : 0,
+    center: pctTxt(ratio),
+    color: hasInc ? GREEN : "#c7cfc9",
     label: `${c.emoji} ${clip(c.name)}`,
-    value: hasInc ? "מההכנסה" : "בקטגוריה",
+    value: "מההכנסה",
     open: {
       cat: c
     }
@@ -4884,22 +4896,22 @@ function ExpenseForm({
   const budgets = data.budgets || [];
   const initBudget = editing?.budgetId ?? prefill?.budgetId ?? null;
   const initCat = editing?.catId ?? prefill?.catId ?? (initBudget && (budgets.find(b => b.id === initBudget) || {}).catId) ?? null;
-  const [name, setName] = useState(editing?.name || "");
-  const [amount, setAmount] = useState(editing?.amount != null ? String(editing.amount) : prefill?.amount ? String(prefill.amount) : "");
+  const [name, setName] = useState(editing?.name || prefill?.name || "");
+  const [amount, setAmount] = useState(editing?.amount != null ? String(editing.amount) : prefill?.amount != null ? String(prefill.amount) : "");
   const [catId, setCatId] = useState(initCat);
   const [budgetId, setBudgetId] = useState(initBudget);
   const cat = cats.find(c => c.id === catId);
-  const [emoji, setEmoji] = useState(editing?.emoji || (budgets.find(b => b.id === initBudget) || {}).emoji || cat && cat.emoji || "🧾");
+  const [emoji, setEmoji] = useState(editing?.emoji || prefill?.emoji || (budgets.find(b => b.id === initBudget) || {}).emoji || cat && cat.emoji || "🧾");
   const defaultDate = ym === todayYM() ? todayISO() : ym + "-15";
-  const [date, setDate] = useState(isISO(editing?.date) ? editing.date : defaultDate);
-  const [note, setNote] = useState(editing?.note || "");
+  const [date, setDate] = useState(isISO(editing?.date) ? editing.date : isISO(prefill?.date) ? prefill.date : defaultDate);
+  const [note, setNote] = useState(editing?.note || prefill?.note || "");
   const [creating, setCreating] = useState(false);
   const [nbName, setNbName] = useState("");
   const [nbAmount, setNbAmount] = useState("");
   const [pendingSave, setPendingSave] = useState(null);
   const [nInst, setNInst] = useState(1);
-  const [recur, setRecur] = useState(!!(editing?.recur && +editing.recur.freq));
-  const [recurFreq, setRecurFreq] = useState(editing?.recur?.freq || 1);
+  const [recur, setRecur] = useState(!!((editing?.recur || prefill?.recur) && +(editing?.recur || prefill?.recur).freq));
+  const [recurFreq, setRecurFreq] = useState((editing?.recur || prefill?.recur)?.freq || 1);
   const [popClosing, setPopClosing] = useState(false);
   const closePop = fn => {
     setPopClosing(true);
@@ -7768,6 +7780,74 @@ function CategoryDeleteDialog({
   }, "ביטול"));
 }
 
+/* ============================ פופאפ אזהרה (חריגת תקציב) ============================ */
+function WarnPopup({
+  icon = "⚠️",
+  title,
+  tone = "amber",
+  children,
+  actions,
+  onCancel
+}) {
+  const [closing, setClosing] = useState(false);
+  const close = fn => {
+    setClosing(true);
+    setTimeout(() => {
+      setClosing(false);
+      fn && fn();
+    }, 170);
+  };
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === "Escape") close(onCancel);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  const titleColor = tone === "red" ? RED : "#b7791f";
+  return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: () => close(onCancel),
+    style: {
+      zIndex: 90,
+      background: "rgba(35,45,40,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: `${closing ? "dimOut" : "dimIn"} 180ms ease forwards`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[372px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(30,45,38,0.5), 0 6px 16px -8px rgba(30,45,38,0.2)",
+      animation: `${closing ? "popOut 160ms ease forwards" : "popIn 200ms cubic-bezier(.32,.72,0,1) both"}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[30px] mb-2",
+    style: {
+      animation: "warnPulse 1.7s ease-in-out infinite"
+    }
+  }, icon), /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2.5",
+    style: {
+      color: titleColor
+    }
+  }, title), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-5 leading-relaxed px-1"
+  }, children), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, actions.map((a, i) => /*#__PURE__*/React.createElement("button", {
+    key: i,
+    onClick: () => close(a.onClick),
+    className: "w-full rounded-2xl font-bold text-[14.5px] transition-transform active:scale-[0.98]",
+    style: {
+      height: 52,
+      ...a.style
+    }
+  }, a.label))))), document.body);
+}
+
 /* ============================ אפליקציה ============================ */
 function App() {
   const boot = useMemo(() => loadUsers(), []);
@@ -8035,9 +8115,8 @@ function App() {
   };
 
   /* הוצאות */
-  const upsertExpense = e => {
+  const doUpsertExpense = (e, editing) => {
     const prev = data;
-    const editing = data.expenses.some(x => x.id === e.id);
     setData(d => {
       const ex = d.expenses.some(x => x.id === e.id);
       return {
@@ -8050,6 +8129,31 @@ function App() {
     const catName = (data.categories.find(c => c.id === e.catId) || {}).name;
     const where = bud ? `לתקציב ${bud.name}` : catName ? `בקטגוריה ${catName}` : "כהוצאה לא מתוקצבת";
     showToast(editing ? `${e.name} עודכן` : `${e.name} על סך ${shekel(e.amount)} נוסף ${where}`, () => setData(prev));
+  };
+  const upsertExpense = e => {
+    const editing = data.expenses.some(x => x.id === e.id);
+    const bud = e.budgetId ? data.budgets.find(b => b.id === e.budgetId) : null;
+    if (bud && !bud.fixed) {
+      // מצב 1 — בדיקת חריגה לפני שמירה
+      const target = +bud.target || 0;
+      const list = editing ? data.expenses.map(x => x.id === e.id ? e : x) : [e, ...data.expenses];
+      const usedNow = budgetUsedFor(data.expenses, bud.id, ym);
+      const usedAfter = budgetUsedFor(list, bud.id, ym);
+      if (usedAfter > target && usedAfter > usedNow) {
+        // החריגה נוצרת/גדלה עקב השינוי
+        setModal({
+          type: "budgetOverExpense",
+          pending: e,
+          editing,
+          budget: bud,
+          target,
+          after: usedAfter,
+          over: usedAfter - target
+        });
+        return;
+      }
+    }
+    doUpsertExpense(e, editing);
   };
   const upsertMany = list => {
     if (!list || !list.length) return;
@@ -8075,9 +8179,8 @@ function App() {
   };
 
   /* תקציבים */
-  const saveBudget = b => {
+  const doSaveBudget = (b, editing) => {
     const prev = data;
-    const editing = data.budgets.some(x => x.id === b.id);
     setData(d => {
       const old = d.budgets.find(x => x.id === b.id);
       const ex = !!old;
@@ -8094,6 +8197,25 @@ function App() {
     });
     closeModal();
     showToast(editing ? `התקציב ${b.name} עודכן` : `התקציב ${b.name} (${shekel(b.target)}) נוסף`, () => setData(prev));
+  };
+  const saveBudget = b => {
+    const editing = data.budgets.some(x => x.id === b.id);
+    if (editing && !b.fixed) {
+      // מצב 2 — התקציב החדש קטן מסך ההוצאות הקיימות
+      const target = +b.target || 0;
+      const used = budgetUsedFor(data.expenses, b.id, ym);
+      if (used > target) {
+        setModal({
+          type: "budgetOverEdit",
+          pending: b,
+          used,
+          target,
+          over: used - target
+        });
+        return;
+      }
+    }
+    doSaveBudget(b, editing);
   };
   const createBudgetInline = nb => {
     const prev = data;
@@ -8789,7 +8911,187 @@ function App() {
     onUnbudget: () => doDeleteBudget(modal.budget.id, "unbudget"),
     onDeleteAll: () => doDeleteBudget(modal.budget.id, "deleteAll"),
     onCancel: closeModal
-  }), modal?.type === "quick" && /*#__PURE__*/React.createElement(QuickAdd, {
+  }), modal?.type === "budgetOverExpense" && (() => {
+    const m = modal;
+    const reopen = () => m.editing ? setModal({
+      type: "expenseForm",
+      editing: m.pending
+    }) : setModal({
+      type: "expenseForm",
+      prefill: m.pending
+    });
+    return /*#__PURE__*/React.createElement(WarnPopup, {
+      icon: "⚠️",
+      tone: "amber",
+      title: "התקציב ייחרג",
+      onCancel: reopen,
+      actions: [{
+        label: `הגדל את התקציב ל־${shekel(m.after)}`,
+        style: {
+          background: greenGrad,
+          color: "#fff",
+          boxShadow: "0 8px 18px -8px rgba(60,127,95,0.55)"
+        },
+        onClick: () => {
+          const prev = data;
+          setData(d => {
+            const ex = d.expenses.some(x => x.id === m.pending.id);
+            return {
+              ...d,
+              budgets: d.budgets.map(x => x.id === m.budget.id ? {
+                ...x,
+                target: m.after
+              } : x),
+              expenses: ex ? d.expenses.map(x => x.id === m.pending.id ? m.pending : x) : [m.pending, ...d.expenses]
+            };
+          });
+          closeModal();
+          showToast(`התקציב ${m.budget.name} עודכן ל־${shekel(m.after)} וההוצאה נשמרה`, () => setData(prev));
+        }
+      }, {
+        label: "השאר את התקציב והוסף את ההוצאה",
+        style: {
+          background: "rgba(245,158,11,0.14)",
+          color: "#b7791f"
+        },
+        onClick: () => doUpsertExpense(m.pending, m.editing)
+      }, {
+        label: "ביטול",
+        style: {
+          background: "#f1f3f2",
+          color: "#57534e",
+          border: "1px solid rgba(120,150,135,0.14)"
+        },
+        onClick: reopen
+      }]
+    }, "ההוצאה ", /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, "\"", m.pending.name, "\""), " תגרום לחריגה מתקציב ", /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, m.budget.name), ".", /*#__PURE__*/React.createElement("div", {
+      className: "mt-3 rounded-2xl px-4 py-3 text-[13px] text-right",
+      style: {
+        background: "rgba(245,158,11,0.08)"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between py-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-500"
+    }, "התקציב הנוכחי"), /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, shekel(m.target))), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between py-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-500"
+    }, "לאחר ההוצאה"), /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, shekel(m.after))), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between py-0.5 mt-0.5 pt-1.5",
+      style: {
+        borderTop: "1px solid rgba(245,158,11,0.25)"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-semibold",
+      style: {
+        color: "#b7791f"
+      }
+    }, "חריגה של"), /*#__PURE__*/React.createElement("span", {
+      className: "font-extrabold",
+      style: {
+        color: RED
+      }
+    }, shekel(m.over)))));
+  })(), modal?.type === "budgetOverEdit" && (() => {
+    const m = modal;
+    return /*#__PURE__*/React.createElement(WarnPopup, {
+      icon: "⚠️",
+      tone: "amber",
+      title: "התקציב קטן מסך ההוצאות",
+      onCancel: () => setModal({
+        type: "budgetForm",
+        editing: m.pending
+      }),
+      actions: [{
+        label: "עדכן בכל זאת",
+        style: {
+          background: "rgba(245,158,11,0.14)",
+          color: "#b7791f"
+        },
+        onClick: () => doSaveBudget(m.pending, true)
+      }, {
+        label: "חזור לעריכה",
+        style: {
+          background: "#f1f3f2",
+          color: "#57534e",
+          border: "1px solid rgba(120,150,135,0.14)"
+        },
+        onClick: () => setModal({
+          type: "budgetForm",
+          editing: m.pending
+        })
+      }]
+    }, "בתקציב ", /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, m.pending.name), " קיימות כבר הוצאות בסך ", /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, shekel(m.used)), ".", /*#__PURE__*/React.createElement("div", {
+      className: "mt-3 rounded-2xl px-4 py-3 text-[13px] text-right",
+      style: {
+        background: "rgba(245,158,11,0.08)"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between py-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-500"
+    }, "סך ההוצאות"), /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, shekel(m.used))), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between py-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-stone-500"
+    }, "התקציב החדש"), /*#__PURE__*/React.createElement("span", {
+      className: "font-bold",
+      style: {
+        color: INK
+      }
+    }, shekel(m.target))), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between py-0.5 mt-0.5 pt-1.5",
+      style: {
+        borderTop: "1px solid rgba(245,158,11,0.25)"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-semibold",
+      style: {
+        color: "#b7791f"
+      }
+    }, "חריגה מיידית של"), /*#__PURE__*/React.createElement("span", {
+      className: "font-extrabold",
+      style: {
+        color: RED
+      }
+    }, shekel(m.over)))));
+  })(), modal?.type === "quick" && /*#__PURE__*/React.createElement(QuickAdd, {
     budget: modal.budget,
     ym: ym,
     expenses: data.expenses,
