@@ -1877,7 +1877,8 @@ function ForecastDetail({
   const projected = calc.projected || 0;
   const plannedExp = Math.max(0, committed - actual - overspend);
   const savingsGoal = +data.savingsGoal || 0;
-  const finalLeft = projected - savingsGoal;
+  const effectiveSavings = Math.min(savingsGoal, Math.max(0, projected));
+  const finalLeft = projected - effectiveSavings;
   const targetsTotal = calc.targetsTotal || 0;
   const unbudgetedTot = calc.unbudgeted || 0;
   const budgetItems = (calc.budgets || []).filter(b => budgetDue(b, ym)).map(b => ({
@@ -1938,23 +1939,41 @@ function ForecastDetail({
       className: "w-full flex items-center justify-between py-1.5"
     }, h("span", {
       className: "flex items-center gap-1.5 min-w-0"
-    }, canExpand ? h("span", {
-      className: "text-stone-400 text-[9px] shrink-0",
-      style: {
-        display: "inline-block",
-        transition: "transform .2s",
-        transform: isOpen ? "rotate(90deg)" : "none"
-      }
-    }, "▶") : null, icon ? h("span", {
+    }, icon ? h("span", {
       className: "text-[12px] shrink-0"
     }, icon) : null, h("span", {
       className: (strong ? "font-bold text-[14px]" : "font-medium text-[13px]") + " text-stone-600 truncate"
     }, label)), h("span", {
-      className: (strong ? "font-extrabold text-[15px]" : "font-semibold text-[14px]") + " tabular-nums shrink-0",
+      className: "flex items-center gap-1.5 shrink-0"
+    }, h("span", {
+      className: (strong ? "font-extrabold text-[15px]" : "font-semibold text-[14px]") + " tabular-nums",
       style: {
         color: color
       }
-    }, (sign || "") + shekel(Math.abs(amount)))), canExpand && isOpen ? h("div", {
+    }, (sign || "") + shekel(Math.abs(amount))), canExpand ? h("svg", {
+      width: 13,
+      height: 13,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "#a8a29e",
+      strokeWidth: "2.6",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      className: "shrink-0",
+      style: {
+        transition: "transform .2s",
+        transform: isOpen ? "rotate(-90deg)" : "none"
+      }
+    }, h("path", {
+      d: "m15 18-6-6 6-6"
+    })) : h("span", {
+      className: "shrink-0",
+      style: {
+        width: 13
+      }
+    }))), canExpand ? h(Collapse, {
+      open: isOpen
+    }, h("div", {
       className: "pr-5 pb-1 space-y-0.5"
     }, items.map((x, i) => h("div", {
       key: i,
@@ -1967,7 +1986,7 @@ function ForecastDetail({
       style: x.target != null && x.used > x.target ? {
         color: NEG
       } : undefined
-    }, x.target != null ? `${Math.round(x.used).toLocaleString("he-IL")} / ${shekel(x.target)}` : shekel(x.amount))))) : null);
+    }, x.target != null ? `${Math.round(x.used).toLocaleString("he-IL")} / ${shekel(x.target)}` : shekel(x.amount)))))) : null);
   };
   const card = (...ch) => h("div", {
     className: "rounded-2xl px-3.5",
@@ -1982,7 +2001,7 @@ function ForecastDetail({
     className: "text-center pt-0.5 pb-2"
   }, h("div", {
     className: "text-[12px] text-stone-500 mb-1"
-  }, "נשאר בסוף החודש"), h("div", {
+  }, "נשאר לשימוש בסוף החודש"), h("div", {
     className: "font-extrabold text-[32px] leading-none tabular-nums",
     style: {
       color: finalLeft < 0 ? NEG : POS
@@ -2006,7 +2025,7 @@ function ForecastDetail({
     }
   }, "i")), info ? h("div", {
     className: "text-[11.5px] text-stone-400 leading-relaxed mt-2 px-3"
-  }, "מהכנסות החודש מפחיתים את ההוצאות שבוצעו, המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את יעד החיסכון, והתוצאה היא הסכום שיישאר בסוף החודש.") : null), SecHead("הכנסות"), card(Row({
+  }, "מהכנסות החודש מפחיתים את ההוצאות שבוצעו, המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.") : null), SecHead("הכנסות"), card(Row({
     label: "הכנסות החודש",
     amount: income,
     color: POS,
@@ -2039,12 +2058,12 @@ function ForecastDetail({
     color: projected < 0 ? NEG : POS,
     sign: projected < 0 ? "−" : "",
     k: "bal"
-  }), savingsGoal > 0.5 ? Row({
-    label: "יעד החיסכון",
-    amount: savingsGoal,
+  }), effectiveSavings > 0.5 ? Row({
+    label: "נשמר לחיסכון",
+    amount: effectiveSavings,
     color: MUT,
     sign: "−",
-    icon: "🎯",
+    icon: "🐷",
     k: "goal"
   }) : null, h("div", {
     style: {
@@ -2053,7 +2072,7 @@ function ForecastDetail({
       margin: "5px 0"
     }
   }), Row({
-    label: "נשאר בסוף החודש",
+    label: "נשאר לשימוש בסוף החודש",
     amount: finalLeft,
     color: finalLeft < 0 ? NEG : POS,
     sign: finalLeft < 0 ? "−" : "",
@@ -2075,9 +2094,12 @@ function MonthCard({
   onForecast
 }) {
   const actual = mode === "actual";
-  const over = actual ? calc.remainingNow < 0 : calc.projected < 0;
-  const mainVal = actual ? calc.remainingNow : calc.projected;
-  const label = actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "צפי יתרה לסוף החודש";
+  const goalAmt = +savingsGoal || 0;
+  const savedAmt = Math.min(goalAmt, Math.max(0, calc.projected)); // כמה באמת נשמר לחיסכון (חסום ליתרה הזמינה)
+  const netAvail = calc.projected - savedAmt; // הכסף שבאמת נשאר פנוי לשימוש
+  const over = actual ? calc.remainingNow < 0 : netAvail < 0;
+  const mainVal = actual ? calc.remainingNow : netAvail;
+  const label = actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
   const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה`;
   const rows = actual ? [{
     k: "הכנסה",
@@ -2185,9 +2207,7 @@ function MonthCard({
     style: {
       color: "#fff"
     }
-  }, !actual && !over && /*#__PURE__*/React.createElement("span", {
-    className: "text-[15px] font-semibold"
-  }, "נשאר"), over && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
+  }, over && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: mainVal
   }), /*#__PURE__*/React.createElement("span", {
     className: "text-[15px]"
@@ -2200,9 +2220,9 @@ function MonthCard({
   }, chip))), (() => {
     const S = {
       green: {
-        c: BLUE,
-        bg: "rgba(47,111,237,0.10)",
-        bc: "rgba(47,111,237,0.45)"
+        c: "#17a05e",
+        bg: "rgba(23,160,94,0.10)",
+        bc: "rgba(23,160,94,0.45)"
       },
       amber: {
         c: AMBER,
@@ -2223,23 +2243,27 @@ function MonthCard({
     const intended = +savingsGoal || 0;
     const room = Math.max(0, Math.round(calc.projected));
     const effective = Math.min(intended, room);
-    let gt, msg, amount;
+    let gt, msg, amount, goalLabel;
     if (intended <= 0) {
       gt = S.gray;
-      msg = "הגדירו יעד";
+      goalLabel = "יעד חיסכון";
       amount = 0;
+      msg = "הגדירו יעד";
+    } else if (room <= 0) {
+      gt = S.red;
+      goalLabel = "לא נשאר לחיסכון";
+      amount = 0;
+      msg = `מתוך ${shekel(intended)}`;
+    } else if (effective < intended) {
+      gt = S.amber;
+      goalLabel = "נשמר חלקית";
+      amount = effective;
+      msg = `מתוך ${shekel(intended)}`;
     } else {
+      gt = S.green;
+      goalLabel = "נשמר לחיסכון";
       amount = intended;
-      if (room <= 0) {
-        gt = S.red;
-        msg = "אין מקום כרגע";
-      } else if (effective < intended) {
-        gt = S.amber;
-        msg = `כרגע ${shekel(effective)}`;
-      } else {
-        gt = S.green;
-        msg = "ריאלי";
-      }
+      msg = "הושג";
     }
     return /*#__PURE__*/React.createElement("button", {
       onClick: onEditGoal,
@@ -2254,7 +2278,7 @@ function MonthCard({
       className: "text-[13px]"
     }, "🐷"), /*#__PURE__*/React.createElement("span", {
       className: "text-[12px] font-semibold text-stone-600"
-    }, "יעד חיסכון"), intended > 0 && /*#__PURE__*/React.createElement("span", {
+    }, goalLabel), amount > 0 && /*#__PURE__*/React.createElement("span", {
       className: "text-[12px] font-bold",
       style: {
         color: gt.c
@@ -5493,8 +5517,8 @@ function ExpenseForm({
     style: {
       ...snapChip,
       ...(catId === c.id ? {
-        background: greenGrad,
-        color: "#fff"
+        background: "#DBE6FB",
+        color: GREEN
       } : field)
     }
   }, /*#__PURE__*/React.createElement("span", {
@@ -5512,8 +5536,8 @@ function ExpenseForm({
     style: {
       ...snapChip,
       ...(!budgetId && !creating ? {
-        background: greenGrad,
-        color: "#fff"
+        background: "#DBE6FB",
+        color: GREEN
       } : field),
       animation: "popIn .3s cubic-bezier(.34,1.2,.5,1) both"
     }
@@ -5524,8 +5548,8 @@ function ExpenseForm({
     style: {
       ...snapChip,
       ...(budgetId === b.id ? {
-        background: greenGrad,
-        color: "#fff"
+        background: "#DBE6FB",
+        color: GREEN
       } : field),
       animation: "popIn .3s cubic-bezier(.34,1.2,.5,1) both",
       animationDelay: `${(i + 1) * 45}ms`
@@ -5541,7 +5565,7 @@ function ExpenseForm({
     className: "shrink-0 whitespace-nowrap rounded-full px-3.5 py-2 text-[13px] font-bold",
     style: {
       ...snapChip,
-      background: "rgba(47,111,237,0.14)",
+      background: "transparent",
       color: GREEN,
       animation: "popIn .3s cubic-bezier(.34,1.2,.5,1) both",
       animationDelay: `${(catBudgets.length + 1) * 45}ms`
@@ -5745,8 +5769,8 @@ function BudgetForm({
     style: {
       ...snapChip,
       ...(catId === c.id ? {
-        background: greenGrad,
-        color: "#fff"
+        background: "#DBE6FB",
+        color: GREEN
       } : field)
     }
   }, /*#__PURE__*/React.createElement("span", {
@@ -8049,8 +8073,8 @@ function BudgetDeleteDialog({
     style: {
       ...snapChip,
       ...(target === b.id ? {
-        background: greenGrad,
-        color: "#fff"
+        background: "#DBE6FB",
+        color: GREEN
       } : field)
     }
   }, /*#__PURE__*/React.createElement("span", {
@@ -8105,8 +8129,8 @@ function CategoryDeleteDialog({
     style: {
       ...snapChip,
       ...(target === c.id ? {
-        background: greenGrad,
-        color: "#fff"
+        background: "#DBE6FB",
+        color: GREEN
       } : field)
     }
   }, /*#__PURE__*/React.createElement("span", {
