@@ -1878,6 +1878,19 @@ function ForecastDetail({
   const plannedExp = Math.max(0, committed - actual - overspend);
   const savingsGoal = +data.savingsGoal || 0;
   const finalLeft = projected - savingsGoal;
+  const targetsTotal = calc.targetsTotal || 0;
+  const unbudgetedTot = calc.unbudgeted || 0;
+  const budgetItems = (calc.budgets || []).filter(b => budgetDue(b, ym)).map(b => ({
+    name: b.name || "תקציב",
+    used: calc.usedByBudget[b.id] || 0,
+    target: +b.target || 0,
+    emoji: b.emoji
+  })).filter(x => x.target > 0 || x.used > 0);
+  const unbItems = (calc.active || []).filter(e => !e.budgetId).map(e => ({
+    name: e.name || "הוצאה",
+    amount: +e.amount || 0,
+    emoji: e.emoji
+  })).filter(x => x.amount > 0.5);
   const sources = typeof incomeSourcesFor === "function" ? incomeSourcesFor(data, ym) : [];
   const incomeItems = sources.length > 1 ? sources.map(x => ({
     name: x.name || "הכנסה",
@@ -1949,8 +1962,12 @@ function ForecastDetail({
     }, h("span", {
       className: "truncate flex items-center gap-1"
     }, x.emoji ? h("span", null, x.emoji) : null, h("span", null, x.name)), h("span", {
-      className: "tabular-nums"
-    }, shekel(x.amount))))) : null);
+      dir: "ltr",
+      className: "tabular-nums shrink-0",
+      style: x.target != null && x.used > x.target ? {
+        color: NEG
+      } : undefined
+    }, x.target != null ? `${Math.round(x.used).toLocaleString("he-IL")} / ${shekel(x.target)}` : shekel(x.amount))))) : null);
   };
   const card = (...ch) => h("div", {
     className: "rounded-2xl px-3.5",
@@ -1996,18 +2013,19 @@ function ForecastDetail({
     items: incomeItems,
     k: "inc"
   })), SecHead("הוצאות"), card(Row({
-    label: "הוצאות שבוצעו",
-    amount: actual,
+    label: "מתקציבים",
+    amount: targetsTotal,
     color: NEG,
     sign: "−",
-    items: actualItems,
-    k: "act"
-  }), plannedExp > 0.5 ? Row({
-    label: "הוצאות מתוכננות",
-    amount: plannedExp,
+    items: budgetItems,
+    k: "bud"
+  }), unbudgetedTot > 0.5 ? Row({
+    label: "לא מתוקצב",
+    amount: unbudgetedTot,
     color: NEG,
     sign: "−",
-    k: "plan"
+    items: unbItems,
+    k: "unb"
   }) : null, overspend > 0.5 ? Row({
     label: "חריגות מתקציבים",
     amount: overspend,
@@ -2611,14 +2629,82 @@ function Carousel({
   const dragRef = useRef(0);
   const captured = useRef(false);
   const wrapRef = useRef(null);
+  const startYRef = useRef(0);
+  const idxRef = useRef(1);
   const m = n + 2;
   const realOf = i => ((i - 1) % n + n) % n;
   useEffect(() => {
     setLive(realOf(idx));
+    idxRef.current = idx;
   }, [idx]);
   useEffect(() => {
     if (idx > n) setIdx(1);
   }, [n]); // איפוס אם מספר העמודים קטן
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || n <= 1) return;
+    const ts = e => {
+      const t = e.touches[0];
+      if (!t) return;
+      dragging.current = true;
+      movedRef.current = false;
+      captured.current = false;
+      startX.current = t.clientX;
+      startYRef.current = t.clientY;
+      dragRef.current = 0;
+      w.current = el.offsetWidth || 320;
+    };
+    const tm = e => {
+      if (!dragging.current) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const dx = t.clientX - startX.current;
+      const dy = t.clientY - startYRef.current;
+      if (!movedRef.current) {
+        if (Math.abs(dx) > 5 && Math.abs(dx) > Math.abs(dy)) {
+          movedRef.current = true;
+          setAnim(false);
+        } else if (Math.abs(dy) > 7) {
+          dragging.current = false;
+          return;
+        } else return;
+      }
+      if (e.cancelable) e.preventDefault();
+      dragRef.current = dx;
+      setDrag(dx);
+      const frac = idxRef.current - 1 - dx / (w.current || 1);
+      setLive((frac % n + n) % n);
+    };
+    const te = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      const frac = dragRef.current / (w.current || 1);
+      let ni = idxRef.current;
+      if (frac <= -0.2) ni = idxRef.current + 1;else if (frac >= 0.2) ni = idxRef.current - 1;
+      dragRef.current = 0;
+      setAnim(true);
+      setDrag(0);
+      setIdx(ni);
+    };
+    el.addEventListener("touchstart", ts, {
+      passive: true
+    });
+    el.addEventListener("touchmove", tm, {
+      passive: false
+    });
+    el.addEventListener("touchend", te, {
+      passive: true
+    });
+    el.addEventListener("touchcancel", te, {
+      passive: true
+    });
+    return () => {
+      el.removeEventListener("touchstart", ts);
+      el.removeEventListener("touchmove", tm);
+      el.removeEventListener("touchend", te);
+      el.removeEventListener("touchcancel", te);
+    };
+  }, [n]);
 
   const renderPage = (pg, key) => /*#__PURE__*/React.createElement("div", {
     key: key,
@@ -2749,11 +2835,7 @@ function Carousel({
     onPointerMove: move,
     onPointerUp: up,
     onPointerLeave: up,
-    onPointerCancel: up,
-    onTouchStart: tStart,
-    onTouchMove: tMove,
-    onTouchEnd: tEnd,
-    onTouchCancel: tEnd
+    onPointerCancel: up
   }, /*#__PURE__*/React.createElement("div", {
     style: trackStyle,
     onTransitionEnd: onEnd
@@ -7559,6 +7641,14 @@ function CategoryDetail({
   const ringCenter = hasBudget ? usagePctText(budTotal, budTarget) : "—";
   const ringClr = hasBudget ? pctBudget >= 100 ? RED : pctBudget >= 80 ? AMBER : GREEN : "rgba(122,134,158,0.35)";
   const empty = !budgets.length && !unbudgeted.length;
+  const grandTotal = (data.categories || []).reduce((sum, c) => {
+    const cb = (calc.budgets || []).filter(b => b.catId === c.id);
+    const cu = calc.active.filter(e => !e.budgetId && e.catId === c.id);
+    return sum + cb.reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0) + cu.reduce((s, e) => s + (+e.amount || 0), 0);
+  }, 0);
+  const sharePct = grandTotal > 0 ? total / grandTotal * 100 : 0;
+  const catOver = budgets.filter(b => !b.fixed).reduce((s, b) => s + Math.max(0, (calc.usedByBudget[b.id] || 0) - (+b.target || 0)), 0);
+  const breakdown = budgets.length > 0 ? `${budgets.length} תקציבים · ${shekel(budTarget)}${catOver > 0 ? ` · חריגות ${shekel(catOver)}` : ""} · יצא בפועל ${shekel(total)}` : `${unbudgeted.length} הוצאות · יצא בפועל ${shekel(total)}`;
   return /*#__PURE__*/React.createElement(Sheet, {
     title: `${cat.emoji} ${cat.name}`,
     subtitle: "מה בקטגוריה החודש",
@@ -7567,11 +7657,12 @@ function CategoryDetail({
     className: "flex items-center gap-3 rounded-2xl p-3 mb-3",
     style: field
   }, /*#__PURE__*/React.createElement(Ring, {
-    pct: ringPct,
+    pct: sharePct,
     size: 54,
     stroke: 6,
-    color: ringClr,
-    center: ringCenter
+    color: sharePct > 0 ? GREEN : "rgba(122,134,158,0.35)",
+    center: Math.round(sharePct) + "%",
+    fsScale: 0.9
   }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 text-right"
   }, /*#__PURE__*/React.createElement("div", {
@@ -7581,9 +7672,9 @@ function CategoryDetail({
     }
   }, shekel(total)), /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-stone-400 mt-0.5"
-  }, hasBudget ? /*#__PURE__*/React.createElement(React.Fragment, null, usagePctText(budTotal, budTarget), " מהתקציב נוצל") : /*#__PURE__*/React.createElement(React.Fragment, null, "אין תקציב מוגדר לקטגוריה")), hasBudget && /*#__PURE__*/React.createElement("div", {
+  }, breakdown), /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-stone-400 mt-0.5"
-  }, "מתוקצב ", shekel(budTotal), " מתוך ", shekel(budTarget), " · נשאר ", shekel(Math.max(0, budTarget - budTotal)), unbTotal > 0 ? ` · ${shekel(unbTotal)} לא מתוקצב` : ""))), empty && /*#__PURE__*/React.createElement("div", {
+  }, Math.round(sharePct) + "% מסך הוצאות החודש", hasBudget ? ` · נשאר ${shekel(Math.max(0, budTarget - budTotal))} לניצול` : ""))), empty && /*#__PURE__*/React.createElement("div", {
     className: "text-center text-stone-400 text-[13px] py-4 rounded-2xl mb-3",
     style: {
       background: "rgba(255,255,255,0.4)"
