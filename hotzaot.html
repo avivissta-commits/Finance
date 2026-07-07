@@ -5381,6 +5381,7 @@ function ExpenseForm({
   onSave,
   onSaveMany,
   onSaveInstallmentGroup,
+  onReplaceWithInstallments,
   onClose,
   onDelete,
   onCreateBudget
@@ -5582,7 +5583,7 @@ function ExpenseForm({
       return;
     }
     if (nInst > 1 && !recur) {
-      onSaveMany(splitInstallments(+amount, catId));
+      if (isEdit) onReplaceWithInstallments(editing.id, splitInstallments(+amount, catId));else onSaveMany(splitInstallments(+amount, catId));
       return;
     }
     const obj = {
@@ -5704,7 +5705,7 @@ function ExpenseForm({
     }
   }, "עסקה ", shekel(instTotal), " · תשלום ", instEdit.i, "/", instEdit.n, " · נותרו ", instRemaining)), /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mb-1.5"
-  }, "אופן החיוב"), /*#__PURE__*/React.createElement(ChipRow, null, (instEdit ? [["once", "חד פעמי"], ["inst", "עסקה בתשלומים"], ["recur", "הוצאה חוזרת"]] : isEdit ? [["once", "חד פעמי"], ["recur", "הוצאה חוזרת"]] : [["once", "חד פעמי"], ["inst", "עסקה בתשלומים"], ["recur", "הוצאה חוזרת"]]).map(opt => /*#__PURE__*/React.createElement("button", {
+  }, "אופן החיוב"), /*#__PURE__*/React.createElement(ChipRow, null, (instEdit ? [["once", "חד פעמי"], ["inst", "עסקה בתשלומים"], ["recur", "הוצאה חוזרת"]] : recurEdit ? [["once", "חד פעמי"], ["recur", "הוצאה חוזרת"]] : [["once", "חד פעמי"], ["inst", "עסקה בתשלומים"], ["recur", "הוצאה חוזרת"]]).map(opt => /*#__PURE__*/React.createElement("button", {
     key: opt[0],
     onClick: instEdit ? undefined : () => pickBillMode(opt[0]),
     disabled: !!instEdit && billMode !== opt[0],
@@ -9455,6 +9456,19 @@ function App() {
     const inst = list[0].installments;
     showToast(inst ? `${list[0].name} · ${inst.n} תשלומים על סך ${shekel(total)} נוספו` : `${list.length} הוצאות נוספו`, () => setData(prev));
   };
+  // המרת הוצאה חד-פעמית קיימת לעסקת תשלומים בעריכה — מסיר את ההוצאה המקורית ומוסיף את פירוק התשלומים במקומה
+  const replaceWithInstallments = (oldId, list) => {
+    if (!list || !list.length) return;
+    const prev = data;
+    setData(d => ({
+      ...d,
+      expenses: [...list, ...d.expenses.filter(x => x.id !== oldId)]
+    }));
+    closeModal();
+    const total = list.reduce((s, e) => s + (+e.amount || 0), 0);
+    const inst = list[0].installments;
+    showToast(`${list[0].name} · ${inst.n} תשלומים על סך ${shekel(total)}`.replace(/\s+/g, " ").trim(), () => setData(prev));
+  };
   const upsertInstallmentGroup = ({
     gid,
     meta,
@@ -10411,6 +10425,7 @@ function App() {
     onSave: upsertExpense,
     onSaveMany: upsertMany,
     onSaveInstallmentGroup: upsertInstallmentGroup,
+    onReplaceWithInstallments: replaceWithInstallments,
     onDelete: deleteExpense,
     onCreateBudget: createBudgetInline,
     onClose: closeModal
