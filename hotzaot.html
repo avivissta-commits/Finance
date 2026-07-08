@@ -2517,7 +2517,7 @@ function monthFraction(ym) {
 }
 function budgetInsights(calc, ym) {
   const frac = monthFraction(ym);
-  const flex = calc.budgets.filter(b => !b.fixed).map(b => ({
+  const flex = calc.budgets.filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id])).map(b => ({
     id: b.id,
     emoji: b.emoji || "🎯",
     name: b.name,
@@ -2973,6 +2973,7 @@ function Carousel({
     w.current = wrapRef.current && wrapRef.current.offsetWidth || 320;
   };
   const move = e => {
+    if (e.pointerType === "touch") return;
     if (!dragging.current) return;
     const dx = e.clientX - startX.current;
     if (Math.abs(dx) > 6) {
@@ -2991,7 +2992,8 @@ function Carousel({
     const frac = idx - 1 - dx / (w.current || 1);
     setLive((frac % n + n) % n);
   };
-  const up = () => {
+  const up = e => {
+    if (e && e.pointerType === "touch") return;
     if (!dragging.current) return;
     dragging.current = false;
     const frac = dragRef.current / (w.current || 1);
@@ -3121,7 +3123,7 @@ function RingsCarousel({
   const ubShare = totalSpend > 0 ? ub / totalSpend : 0;
   const oppR = ins.opp && ins.opp.ratio > 0 ? ins.opp.ratio : 0; // ניצול מול תקציב בלבד; אין נפילה להכנסה
 
-  const varB = calc.budgets.filter(b => !b.fixed);
+  const varB = calc.budgets.filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id]));
   const overCount = varB.filter(b => (calc.usedByBudget[b.id] || 0) > (+b.target || 0)).length;
   const riskCount = varB.filter(b => {
     const t = +b.target || 0;
@@ -5493,12 +5495,20 @@ function ExpenseForm({
   onReplaceWithInstallments,
   onClose,
   onDelete,
+  onDeleteInstallment,
   onCreateBudget
 }) {
   const isEdit = !!editing;
+  const [delAsk, setDelAsk] = useState(false);
   const instEdit = editing && editing.installments || null;
   const instGroup = instEdit ? (data.expenses || []).filter(x => x.installments && x.installments.id === instEdit.id) : [];
   const instTotal = instGroup.reduce((s, x) => s + (+x.amount || 0), 0);
+  const instPaidAmount = instEdit ? instGroup.filter(x => {
+    const cur = todayYM(),
+      tIso = todayISO();
+    return x.ym < cur ? true : x.ym > cur ? false : isISO(x.date) ? x.date.slice(0, 10) <= tIso : true;
+  }).reduce((s, x) => s + (+x.amount || 0), 0) : 0;
+  const instRemainMoney = Math.max(0, instTotal - instPaidAmount); // כמה כסף עוד נשאר לשלם
   const instRemaining = instEdit ? Math.max(0, instEdit.n - instEdit.i) : 0;
   const [instConfirm, setInstConfirm] = useState(null);
   const instPaidCount = instEdit ? instGroup.filter(x => {
@@ -5824,7 +5834,7 @@ function ExpenseForm({
     style: {
       color: "#a8a29e"
     }
-  }, "עסקה ", shekel(instTotal), " · תשלום ", instEdit.i, "/", instEdit.n, " · נותרו ", instRemaining)), /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, Math.round(instTotal).toLocaleString("he-IL"), "/", shekel(instRemainMoney), " · תשלום ", instEdit.i, "/", instEdit.n, " · נותרו ", instRemaining)), /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mb-1.5"
   }, "אופן החיוב"), /*#__PURE__*/React.createElement(ChipRow, null, (instEdit ? [["once", "חד פעמי"], ["inst", "עסקה בתשלומים"], ["recur", "הוצאה חוזרת"]] : recurEdit ? [["once", "חד פעמי"], ["recur", "הוצאה חוזרת"]] : [["once", "חד פעמי"], ["inst", "עסקה בתשלומים"], ["recur", "הוצאה חוזרת"]]).map(opt => /*#__PURE__*/React.createElement("button", {
     key: opt[0],
@@ -6038,7 +6048,7 @@ function ExpenseForm({
   }, "+ הערה"), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2"
   }, isEdit && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onDelete(editing.id),
+    onClick: () => instEdit ? setDelAsk(true) : onDelete(editing.id),
     className: "rounded-2xl h-11 px-4 font-bold transition-transform active:scale-95",
     style: {
       background: "rgba(180,35,24,0.10)",
@@ -6120,7 +6130,74 @@ function ExpenseForm({
       background: greenGrad,
       boxShadow: "0 8px 18px -8px rgba(47,90,210,0.55)"
     }
-  }, "אישור")))), document.body), instConfirm && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "אישור")))), document.body), delAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: () => setDelAsk(false),
+    style: {
+      zIndex: 130,
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2",
+    style: {
+      color: INK
+    }
+  }, "מחק את עסקת התשלומים?"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, instPaidCount >= 1 ? "זו עסקה שמחולקת למספר תשלומים. בחר כיצד למחוק אותה." : "העסקה עדיין לא התחילה ולכן תימחק במלואה."), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, instPaidCount >= 1 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onDeleteInstallment(instEdit.id, editing.ym, "onward"),
+    className: "w-full rounded-2xl px-4 py-3 text-white text-right transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "מחק מהחודש והלאה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, "מוחק את התשלום הנוכחי ואת כל התשלומים העתידיים. התשלומים שכבר בוצעו יישארו בהיסטוריה.")), instPaidCount >= 1 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onDeleteInstallment(instEdit.id, null, "all"),
+    className: "w-full rounded-2xl px-4 py-3 text-right transition-transform active:scale-[0.98]",
+    style: {
+      background: "#F4E9E8",
+      color: RED
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "מחק את כל העסקה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(180,35,24,0.72)"
+    }
+  }, "מוחק גם תשלומים שכבר בוצעו בחודשים קודמים.")), instPaidCount < 1 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onDeleteInstallment(instEdit.id, null, "all"),
+    className: "w-full rounded-2xl h-12 font-bold text-white text-[15px] transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, "מחק את העסקה"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDelAsk(false),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")))), document.body), instConfirm && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center px-6",
     onClick: () => setInstConfirm(null),
     style: {
@@ -8492,6 +8569,25 @@ function CatManager({
   const downRef = useRef(null);
   const suppressRef = useRef(false);
   const manual = sort === "manual";
+  // בזמן גרירה פעילה: חוסמים גלילת עמוד לגמרי כדי שהגרירה תזיז רק את הכרטיסייה שנתפסה
+  const isDragging = !!drag;
+  useEffect(() => {
+    if (!isDragging) return;
+    const block = e => {
+      if (e.cancelable) e.preventDefault();
+    };
+    document.addEventListener("touchmove", block, {
+      passive: false
+    });
+    const prevOB = document.body.style.overscrollBehavior;
+    document.body.style.overscrollBehavior = "contain";
+    return () => {
+      document.removeEventListener("touchmove", block, {
+        passive: false
+      });
+      document.body.style.overscrollBehavior = prevOB;
+    };
+  }, [isDragging]);
   const HELP = {
     manual: "תפסו וגררו קטגוריה כדי לקבוע את הסדר האישי שלכם. השינוי יתעדכן גם במסך הראשי.",
     pct: "מיון זמני לפי אחוז ניצול התקציב (כמה נוצל מתוך היעד). הטבעת מציגה את אחוז הניצול; קטגוריות ללא תקציב מסומנות ב־— ומופיעות בסוף.",
@@ -9797,6 +9893,23 @@ function App() {
     closeModal();
     showToast(`${removed ? removed.name : "ההוצאה"} נמחקה`, () => setData(prev));
   };
+  // מחיקת עסקת תשלומים: scope "all" = כל העסקה; "onward" = התשלום הנוכחי וכל העתידיים בלבד (שומר היסטוריה)
+  const deleteInstallment = (instId, fromYm, scope) => {
+    const prev = data;
+    const group = (data.expenses || []).filter(x => x.installments && x.installments.id === instId);
+    if (!group.length) {
+      closeModal();
+      return;
+    }
+    const name = group[0].name || "העסקה";
+    const keep = scope === "onward" ? x => !(x.installments && x.installments.id === instId && ymIndex(x.ym) >= ymIndex(fromYm)) : x => !(x.installments && x.installments.id === instId);
+    setData(d => ({
+      ...d,
+      expenses: d.expenses.filter(keep)
+    }));
+    closeModal();
+    showToast(scope === "onward" ? `${name} — נמחקה מהחודש והלאה` : `${name} נמחקה`, () => setData(prev));
+  };
 
   /* תקציבים */
   const doSaveBudget = (b, editing) => {
@@ -10690,6 +10803,7 @@ function App() {
     onSaveInstallmentGroup: upsertInstallmentGroup,
     onReplaceWithInstallments: replaceWithInstallments,
     onDelete: deleteExpense,
+    onDeleteInstallment: deleteInstallment,
     onCreateBudget: createBudgetInline,
     onClose: closeModal
   }), modal?.type === "budgetForm" && /*#__PURE__*/React.createElement(BudgetForm, {
