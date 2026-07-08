@@ -1736,10 +1736,12 @@ function useCalc(data, ym) {
     // תקציב פתוח — היעד נשאר כרגיל. תקציב קבוע — לא נעילה. היעד עצמו לא משתנה (רק החישוב).
     const lockedByBudget = {},
       effTargetByBudget = {};
+    const monthEnded = ymIndex(ym) < ymIndex(todayYM()); // חודש שהסתיים → חישובי אמת בלבד (לא תחזית)
     budgets.forEach(b => {
       const lk = isBudgetLocked(b, ym);
       lockedByBudget[b.id] = lk;
-      effTargetByBudget[b.id] = b.fixed ? +b.target || 0 : lk ? usedByBudget[b.id] || 0 : +b.target || 0;
+      const actualOnly = lk || !b.fixed && monthEnded; // נעול, או תקציב מעקב בחודש שהסתיים
+      effTargetByBudget[b.id] = b.fixed ? +b.target || 0 : actualOnly ? usedByBudget[b.id] || 0 : +b.target || 0;
     });
     const targetsTotal = budgets.reduce((s, b) => s + (b.fixed ? dueByBudget[b.id] ? +b.target || 0 : 0 : effTargetByBudget[b.id]), 0);
     const fixedTotal = budgets.filter(b => b.fixed && dueByBudget[b.id]).reduce((s, b) => s + (+b.target || 0), 0);
@@ -2042,14 +2044,15 @@ function ForecastDetail({
     name: b.name || "תקציב",
     amount: calc.effTargetByBudget && calc.effTargetByBudget[b.id] != null ? calc.effTargetByBudget[b.id] : +b.target || 0,
     emoji: b.emoji
-  })).filter(x => x.amount > 0);
+  })).filter(x => x.amount > 0).sort((a, b) => b.amount - a.amount);
   // הוצאות לא מתוקצבות — בפועל: רק מה שכבר יצא; בצפי: הכול
   const unbBudg = actualMode ? (calc.unbudgetedRealized || 0) : (calc.unbudgeted || 0);
   const unbItems = (calc.active || []).filter(e => !e.budgetId).filter(e => actualMode ? isReal(e) : true).map(e => ({
     name: e.name || "הוצאה",
     amount: +e.amount || 0,
-    emoji: e.emoji
-  })).filter(x => x.amount > 0.5);
+    emoji: e.emoji,
+    date: isISO(e.date) ? e.date : e.ym ? e.ym + "-15" : null
+  })).filter(x => x.amount > 0.5).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.amount - a.amount);
   // שונות תקציבים — בפועל (לפי ניצול ממשי)
   const surplusItems = flexDue.map(b => ({
     name: b.name || "תקציב",
@@ -2068,7 +2071,7 @@ function ForecastDetail({
     name: b.name || "תקציב",
     amount: (calc.usedByBudget[b.id] || 0) - (calc.effTargetByBudget && calc.effTargetByBudget[b.id] != null ? calc.effTargetByBudget[b.id] : +b.target || 0),
     emoji: b.emoji
-  })).filter(x => x.amount > 0.5);
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const sources = typeof incomeSourcesFor === "function" ? incomeSourcesFor(data, ym) : [];
   const incomeItems = sources.length > 1 ? sources.map(x => ({
     name: x.name || "הכנסה",
@@ -2141,8 +2144,12 @@ function ForecastDetail({
       key: i,
       className: "flex items-center justify-between py-0.5 text-[12px] text-stone-400"
     }, h("span", {
+      className: "min-w-0 flex flex-col"
+    }, h("span", {
       className: "truncate flex items-center gap-1"
-    }, x.emoji ? h("span", null, x.emoji) : null, h("span", null, x.name)), h("span", {
+    }, x.emoji ? h("span", null, x.emoji) : null, h("span", null, x.name)), x.date ? h("span", {
+      className: "text-[10px] text-stone-300 leading-tight"
+    }, fmtDate(x.date)) : null), h("span", {
       dir: "ltr",
       className: "tabular-nums shrink-0"
     }, shekel(x.amount)))))) : null);
@@ -5534,7 +5541,7 @@ function ExpenseForm({
   const initBudget = editing?.budgetId ?? prefill?.budgetId ?? null;
   const initCat = editing?.catId ?? prefill?.catId ?? (initBudget && (budgets.find(b => b.id === initBudget) || {}).catId) ?? null;
   const [name, setName] = useState(editing?.name || prefill?.name || "");
-  const [amount, setAmount] = useState(recurEdit ? String(recurEff) : editing?.amount != null ? String(editing.amount) : prefill?.amount != null ? String(prefill.amount) : "");
+  const [amount, setAmount] = useState(recurEdit ? String(recurEff) : instEdit ? String(Math.round(instTotal * 100) / 100) : editing?.amount != null ? String(editing.amount) : prefill?.amount != null ? String(prefill.amount) : "");
   const [catId, setCatId] = useState(initCat);
   const [budgetId, setBudgetId] = useState(initBudget);
   const cat = cats.find(c => c.id === catId);
@@ -5678,12 +5685,28 @@ function ExpenseForm({
         budgetId: budgetId || null,
         note
       };
-      const amountChanged = Math.round(+amount) !== Math.round(+editing.amount || 0);
+      const total = +amount; // amount = סכום העסקה הכולל
+      const amountChanged = Math.round(total) !== Math.round(instTotal);
       const countChanged = instCount !== instEdit.n;
-      if (amountChanged || countChanged) {
+      const targetCount = countChanged ? instCount : instEdit.n;
+      if (amountChanged && instPaidCount >= 1) {
+        // כבר בוצעו תשלומים → לשאול: מהחודש והלאה (ברירת מחדל) או גם קודמים (רטרואקטיבי)
         setInstConfirm({
           meta,
-          newAmount: amountChanged ? +amount : null,
+          total,
+          targetCount,
+          newCount: countChanged ? instCount : null
+        });
+        return;
+      }
+      if (amountChanged || countChanged) {
+        // אין תשלומים שירדו (או רק שינוי מספר תשלומים) → חלוקה מחדש שווה של הסכום הכולל
+        const per = amountChanged ? total / Math.max(1, targetCount) : null;
+        onSaveInstallmentGroup({
+          gid: instEdit.id,
+          meta,
+          newAmount: per,
+          applyAll: true,
           newCount: countChanged ? instCount : null
         });
         return;
@@ -5702,14 +5725,19 @@ function ExpenseForm({
         setRecurAsk(true);
         return;
       }
-      // שינוי מטא-דאטה בהוצאה חוזרת — חל על כל החודשים; סכום הבסיס נשמר
+      // שינוי מטא-דאטה/תאריך בהוצאה חוזרת: אם התאריך שונה — מזיזים את העוגן (ym+date) כך שהמחזור נספר מחדש מהתאריך החדש
+      const baseRec = (data.expenses || []).find(x => x.id === editing.id) || editing;
+      const newDate = isISO(date) ? date : baseRec.date;
+      const newYm = isISO(date) ? date.slice(0, 7) : baseRec.ym;
       onSave({
-        ...editing,
+        ...baseRec,
         name: name.trim(),
         emoji,
         catId,
         budgetId: budgetId || null,
-        note
+        note,
+        date: newDate,
+        ym: newYm
       });
       return;
     }
@@ -5807,7 +5835,7 @@ function ExpenseForm({
     className: "mb-2.5"
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mb-1.5"
-  }, "סכום"), showQuick && quickAmts.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, instEdit ? "סכום העסקה" : "סכום"), showQuick && quickAmts.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "mb-2",
     style: {
       animation: "cardIn .34s cubic-bezier(.22,1,.36,1) both"
@@ -6222,37 +6250,67 @@ function ExpenseForm({
     style: {
       color: INK
     }
-  }, "עדכון עסקת תשלומים"), /*#__PURE__*/React.createElement("div", {
+  }, "עדכון סכום העסקה"), /*#__PURE__*/React.createElement("div", {
     className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
-  }, "שינית נתונים המשפיעים על כל עסקת התשלומים. התשלומים העתידיים יחושבו מחדש; תשלומים שכבר ירדו יישארו ללא שינוי."), /*#__PURE__*/React.createElement("div", {
+  }, "כבר בוצעו תשלומים בעסקה זו. כיצד להחיל את הסכום החדש?"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-2.5"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       const c = instConfirm;
       setInstConfirm(null);
+      const per = (c.total - instPaidAmount) / Math.max(1, c.targetCount - instPaidCount);
       onSaveInstallmentGroup({
-        gid: editing.installments.id,
+        gid: instEdit.id,
         meta: c.meta,
-        newAmount: c.newAmount,
+        newAmount: per,
+        applyAll: false,
         newCount: c.newCount
       });
     },
-    className: "w-full rounded-2xl font-bold text-[15px] text-white transition-transform active:scale-[0.98]",
+    className: "w-full rounded-2xl px-4 py-3 text-white text-right transition-transform active:scale-[0.98]",
     style: {
-      height: 53,
-      background: greenGrad,
-      boxShadow: "0 8px 18px -8px rgba(47,90,210,0.55)"
+      background: greenGrad
     }
-  }, "עדכן את כל העסקה"), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "עדכן מהחודש והלאה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, "מחלק מחדש רק את התשלומים שנותרו. תשלומים שכבר בוצעו יישארו כפי שהם.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const c = instConfirm;
+      setInstConfirm(null);
+      const per = c.total / Math.max(1, c.targetCount);
+      onSaveInstallmentGroup({
+        gid: instEdit.id,
+        meta: c.meta,
+        newAmount: per,
+        applyAll: true,
+        newCount: c.newCount
+      });
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-right transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "עדכן את כל העסקה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, "מחלק מחדש את כל התשלומים באופן שווה, כולל חודשים שכבר בוצעו.")), /*#__PURE__*/React.createElement("button", {
     onClick: () => setInstConfirm(null),
-    className: "w-full rounded-2xl font-semibold text-[15px] transition-transform active:scale-[0.98]",
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
     style: {
-      height: 53,
-      background: "#f1f2f6",
-      color: INK,
-      border: "1px solid rgba(122,134,158,0.14)"
+      background: "transparent",
+      color: GREEN
     }
-  }, "בטל")))), document.body), recurAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "ביטול")))), document.body), recurAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center px-6",
     onClick: () => setRecurAsk(false),
     style: {
@@ -7913,9 +7971,6 @@ function FilterSheet({
   }, {
     k: "az",
     label: "א-ת"
-  }, {
-    k: "za",
-    label: "ת-א"
   }];
   const sortOpts = singleCat ? expSortOpts : catSortOpts;
   const sortKey = singleCat ? filter.expSort || "new" : filter.catSort || "manual";
@@ -7960,7 +8015,9 @@ function FilterSheet({
     key: "e",
     className: "text-[15px]"
   }, c.emoji), c.name], c.id))), // ===== מיון/תצוגת הוצאות (בין קטגוריה למצב התקציב, רק כשנבחרה קטגוריה) =====
-  singleCat && h("div", {
+  h(Collapse, {
+    open: singleCat
+  }, h("div", {
     className: "rounded-2xl px-3.5 mb-4",
     style: field
   }, h(MenuField, {
@@ -7969,7 +8026,7 @@ function FilterSheet({
     anchorRef: sortRef,
     open: sortOpen,
     onOpen: openSort
-  })), singleCat && sortOpen && h(MenuShell, {
+  }))), singleCat && sortOpen && h(MenuShell, {
     anchorRef: sortRef,
     closing: sortClosing,
     onClose: closeSort
@@ -9818,7 +9875,8 @@ function App() {
     gid,
     meta,
     newAmount,
-    newCount
+    newCount,
+    applyAll
   }) => {
     const prev = data;
     const cur = todayYM(),
@@ -9838,8 +9896,8 @@ function App() {
           upd.budgetId = meta.budgetId != null ? meta.budgetId : null;
           if (meta.note != null) upd.note = meta.note;
         }
-        // שינוי סכום משפיע רק על תשלומים עתידיים — היסטוריה לא משתנה
-        if (newAmount != null && !isPaid(x)) upd.amount = newAmount;
+        // שינוי סכום: כברירת מחדל רק תשלומים עתידיים; applyAll=true → גם תשלומים שכבר ירדו (עדכון רטרואקטיבי מפורש)
+        if (newAmount != null && (applyAll || !isPaid(x))) upd.amount = newAmount;
         return upd;
       });
       // הקטנת מספר התשלומים (רק להמשך) — מבטל תשלומים עתידיים שטרם ירדו בלבד; תשלומים ששולמו לא נמחקים ולא משתנים
@@ -10229,7 +10287,7 @@ function App() {
     st: catStats(c)
   }));
   const catGrandTotal = catItems.reduce((s, x) => s + x.st.total, 0);
-  const filterActive = filter.cat != null || filter.type !== "all";
+  const filterActive = filter.cat != null || filter.type !== "all" || (filter.status || "all") !== "all";
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh"
@@ -10381,7 +10439,8 @@ function App() {
     style: {
       ...field,
       ...(filterActive ? {
-        background: "rgba(47,111,237,0.16)"
+        background: "#DBE6FA",
+        border: "1.5px solid " + GREEN
       } : {})
     }
   }, /*#__PURE__*/React.createElement("svg", {
