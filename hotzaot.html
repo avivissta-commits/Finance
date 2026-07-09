@@ -372,7 +372,7 @@ const GREEN = "#2f6fed",
   RED = "#b42318",
   AMBER = "#f59e0b",
   INK = "#44403c";
-const BLUE = "#2f6fed"; const PURPLE = "#6d4de0";
+const BLUE = "#2f6fed"; const PURPLE = "#6d4de0"; const EMERALD = "#17a05e";
 const glass = (extra = {}) => ({
   background: "rgba(255,255,255,0.55)",
   backdropFilter: "blur(18px) saturate(160%)",
@@ -1624,17 +1624,19 @@ function usagePctText(used, target) {
 }
 function incomeApplies(src, ym) {
   const sy = src.ym || (isISO(src.date) ? src.date.slice(0, 7) : todayYM());
-  // גבולות מפורשים (אם הוגדרו) — תוספתי, לא נדרש בנתונים קיימים
-  if (src.startYm && ymIndex(ym) < ymIndex(src.startYm)) return false;
   if (src.endYm && ymIndex(ym) >= ymIndex(src.endYm)) return false;
   if (src.recur && +src.recur.freq) {
-    // הכנסה חוזרת חלה בכל חודש שתואם לתדירות — גם לפני חודש העוגן.
-    // (העוגן נקבע בעת יצירת הרכיב, ולכן חודשי עבר הציגו 0 בטעות.)
     const f = Math.max(1, +src.recur.freq);
     const di = ymIndex(ym) - ymIndex(sy);
-    return (di % f + f) % f === 0;
+    const phase = (di % f + f) % f === 0;
+    if (!phase) return false;
+    // רכיב חדש עם startYm מפורש: חל מהחודש שנבחר והלאה בלבד.
+    if (src.startYm) return ymIndex(ym) >= ymIndex(src.startYm);
+    // רכיב ישן (לפני העדכון) — ללא startYm: חל גם על חודשי עבר,
+    // כי העוגן נקבע בעת המרת הנתונים ולא מייצג את תחילת ההכנסה בפועל.
+    return true;
   }
-  return sy === ym; // חד־פעמי — רק בחודש שלו
+  return sy === ym; // חד־פעמי — רק בחודש שנבחר, לעולם לא משוכפל קדימה
 }
 function incomeSourcesFor(data, ym) {
   return (data.incomeSources || []).filter(s => incomeApplies(s, ym));
@@ -2085,10 +2087,11 @@ function ForecastDetail({
     amount: +x.amount || 0,
     emoji: x.emoji
   })) : null;
-  const bottom = actualMode ? remainingNow : finalLeft;
   const projNeg = projected < -0.5;
+  const endTotalLeft = Math.max(0, projected); // סה״כ נשאר בסוף החודש (כולל מה שנשמר לחיסכון)
+  const bottom = actualMode ? remainingNow : monthEnded ? endTotalLeft : finalLeft;
   const finalPos = !projNeg && finalLeft > 0.5;
-  const heroLabel = monthEnded ? projNeg ? "החודש הסתיים במינוס" : finalPos ? "נותרו בסוף החודש" : "החודש הסתיים באיזון" : actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
+  const heroLabel = monthEnded ? projNeg ? "החודש הסתיים במינוס" : endTotalLeft > 0.5 ? "יתרה בסוף החודש" : "החודש הסתיים באיזון" : actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
   const SecHead = t => h("div", {
     className: "text-[11px] font-bold tracking-wide text-stone-400 mt-3.5 mb-1.5 px-1"
   }, t);
@@ -2176,7 +2179,7 @@ function ForecastDetail({
     }
   });
   const varianceRows = actualMode || monthEnded ? [surplusTot > 0.5 ? Row({
-    label: "יתרה מתקציבים",
+    label: "נשאר מתקציבים (לא נוצל)",
     amount: surplusTot,
     color: POS,
     sign: "+",
@@ -2197,37 +2200,41 @@ function ForecastDetail({
     items: overItems,
     k: "over"
   }) : null;
+  // ===== סיכום תוצאה לחודש שהסתיים =====
+  // יתרת סוף החודש בפועל = projected. נשמר בפועל = min(יעד, max(0,יתרה)). מעבר ליעד = max(0, יתרה - יעד).
+  const endBalance = projected;
+  const goalSet = +data.savingsGoal || 0;
+  const savedActual = Math.min(goalSet, Math.max(0, endBalance));
+  const overGoal = Math.max(0, endBalance - goalSet);
+  const totalLeft = savedActual + overGoal; // === max(0, endBalance)
   const summaryRows = monthEnded ? projNeg ? [Row({
     label: "החודש הסתיים במינוס",
-    amount: projected,
+    amount: endBalance,
     color: NEG,
-    sign: "−",
+    sign: "\u2212",
     strong: true,
     k: "fin"
-  })] : [Row({
-    label: "יתרה לפני חיסכון",
-    amount: projected,
-    color: projected < 0 ? NEG : POS,
-    sign: projected < 0 ? "−" : "",
-    k: "bal"
-  }), effectiveSavings > 0.5 ? Row({
-    label: "נשמר לחיסכון",
-    amount: effectiveSavings,
+  })] : [goalSet > 0 ? Row({
+    label: "\u05d9\u05e2\u05d3 \u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    amount: goalSet,
     color: MUT,
-    sign: "−",
-    icon: "🐷",
-    k: "goal"
-  }) : (+data.savingsGoal || 0) > 0 ? Row({
-    label: "לא נשאר לחיסכון",
-    amount: 0,
-    color: MUT,
-    icon: "🐷",
-    k: "goal"
+    icon: "\ud83c\udfaf",
+    k: "goal-target"
+  }) : null, goalSet > 0 ? Row({
+    label: "\u05e0\u05e9\u05de\u05e8 \u05d1\u05e4\u05d5\u05e2\u05dc \u05dc\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    amount: savedActual,
+    color: savedActual >= goalSet - 0.5 ? POS : AMBER,
+    icon: "\ud83d\udc37",
+    k: "goal-saved"
+  }) : null, goalSet > 0 ? Row({
+    label: "\u05d9\u05ea\u05e8\u05d4 \u05de\u05e2\u05d1\u05e8 \u05dc\u05d9\u05e2\u05d3",
+    amount: overGoal,
+    color: overGoal > 0.5 ? POS : MUT,
+    k: "goal-over"
   }) : null, divider(), Row({
-    label: finalPos ? "נותר בסוף החודש" : "לא נותרה יתרה בסוף החודש",
-    amount: finalLeft,
-    color: finalLeft < 0 ? NEG : POS,
-    sign: finalLeft < 0 ? "−" : "",
+    label: "\u05e1\u05d4\u05f4\u05db \u05d9\u05ea\u05e8\u05d4 \u05d1\u05e1\u05d5\u05e3 \u05d4\u05d7\u05d5\u05d3\u05e9",
+    amount: totalLeft,
+    color: totalLeft > 0.5 ? POS : MUT,
     strong: true,
     k: "fin2"
   })] : actualMode ? [Row({
@@ -2267,6 +2274,18 @@ function ForecastDetail({
   })];
   const infoText = monthEnded ? "החודש הסתיים, ולכן המספרים הם נתוני אמת: ההכנסות מול ההוצאות שיצאו בפועל. תקציבי המעקב מחושבים לפי מה שבאמת יצא, ולא לפי היעד." : actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
   const infoShort = monthEnded ? "נתוני אמת — כך הסתיים החודש בפועל." : actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
+  // סה״כ הוצאות החודש = תקציבים + לא מתוקצבות (+ חריגות, רק בתחזית שבה הן מוצגות כשורה נוספת)
+  const unbShownAmt = unbBudg > 0.5 ? unbBudg : 0;
+  const overIncluded = !monthEnded && !actualMode && overspend > 0.5 ? overspend : 0;
+  const totalExpenses = targetsTotal + unbShownAmt + overIncluded;
+  const totalExpensesRow = [divider(), Row({
+    label: "סה״כ הוצאות החודש",
+    amount: totalExpenses,
+    color: NEG,
+    sign: "−",
+    strong: true,
+    k: "totexp"
+  })];
   return h(Sheet, {
     title: monthEnded ? "סיכום חודשי" : "פירוט התחזית החודשית",
     onClose: onClose
@@ -2326,7 +2345,7 @@ function ForecastDetail({
     sign: "−",
     items: unbItems,
     k: "unb"
-  }) : null, varianceRows), SecHead("סיכום"), card(summaryRows), h("div", {
+  }) : null, varianceRows, totalExpensesRow), SecHead("סיכום"), card(summaryRows), h("div", {
     style: {
       height: 6
     }
@@ -2348,9 +2367,10 @@ function MonthCard({
   const goalAmt = +savingsGoal || 0;
   const savedAmt = Math.min(goalAmt, Math.max(0, calc.projected)); // כמה באמת נשמר לחיסכון (חסום ליתרה הזמינה)
   const netAvail = calc.projected - savedAmt; // הכסף שבאמת נשאר פנוי לשימוש
-  const over = actual ? calc.remainingNow < 0 : netAvail < 0;
-  const mainVal = actual ? calc.remainingNow : netAvail;
-  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "נותרו בסוף החודש" : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
+  const endTotal = Math.max(0, calc.projected); // חודש שהסתיים: סה״כ נשאר (כולל מה שנשמר לחיסכון)
+  const over = actual ? calc.remainingNow < 0 : monthEnded ? calc.projected < -0.5 : netAvail < 0;
+  const mainVal = actual ? calc.remainingNow : monthEnded ? calc.projected < -0.5 ? calc.projected : endTotal : netAvail;
+  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "יתרה בסוף החודש" : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
   const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה`;
   const rows = actual ? [{
     k: "הכנסה",
@@ -2746,11 +2766,327 @@ function categoryShares(data, calc) {
 const LEVEL_RANK = {
   red: 0,
   yellow: 1,
-  green: 2
+  green: 2,
+  blue: 3
 };
+/* ניתוח חודש אחד — מקור אמת משותף לתובנות ולרינגים (נתוני אמת, ללא תחזית) */
+function monthReport(data, calc, ym) {
+  const flex = (calc.budgets || []).filter(b => !b.fixed);
+  const usedOf = b => calc.usedByBudget[b.id] || 0;
+  const surplus = flex.map(b => ({
+    b,
+    amount: (+b.target || 0) - usedOf(b)
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
+  const over = flex.map(b => ({
+    b,
+    amount: usedOf(b) - (+b.target || 0)
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
+  const surplusTot = surplus.reduce((s, x) => s + x.amount, 0);
+  const overTot = over.reduce((s, x) => s + x.amount, 0);
+  const exps = (calc.active || []).filter(e => (+e.amount || 0) > 0);
+  const topExpenses = exps.slice().sort((a, b) => (+b.amount || 0) - (+a.amount || 0)).slice(0, 10);
+  const biggest = topExpenses[0] || null;
+  const total = exps.reduce((s, e) => s + (+e.amount || 0), 0);
+  const budgeted = exps.filter(e => e.budgetId).reduce((s, e) => s + (+e.amount || 0), 0);
+  const unbudgeted = total - budgeted;
+  const budgetedPct = total > 0 ? budgeted / total * 100 : 0;
+  // קטגוריה כבדה ביותר
+  const byCat = {};
+  exps.forEach(e => {
+    if (!e.catId) return;
+    byCat[e.catId] = (byCat[e.catId] || 0) + (+e.amount || 0);
+  });
+  const catList = Object.keys(byCat).map(id => ({
+    cat: (data.categories || []).find(c => c.id === id),
+    amount: byCat[id],
+    share: total > 0 ? byCat[id] / total * 100 : 0
+  })).filter(x => x.cat).sort((a, b) => b.amount - a.amount);
+  const topCat = catList[0] || null;
+  // חיסכון
+  const goal = +data.savingsGoal || 0;
+  const saved = Math.min(goal, Math.max(0, calc.projected || 0));
+  const goalMet = goal > 0 && saved >= goal - 0.5;
+  // ממוצע יומי (לפי ימי החודש בפועל)
+  const p = ymParts(ym);
+  const daysInMonth = new Date(p.y, p.m, 0).getDate();
+  const dailyAvg = total > 0 ? total / daysInMonth : 0;
+  return {
+    ym,
+    flex,
+    surplus,
+    over,
+    surplusTot,
+    overTot,
+    exps,
+    topExpenses,
+    biggest,
+    total,
+    budgeted,
+    unbudgeted,
+    budgetedPct,
+    catList,
+    topCat,
+    goal,
+    saved,
+    goalMet,
+    count: exps.length,
+    dailyAvg,
+    daysInMonth
+  };
+}
+/* השוואה לחודש הקודם — למגמות */
+function monthTrend(data, ym, calcFor) {
+  try {
+    const prevYm = shiftYM(ym, -1);
+    const cur = (data.expenses || []).filter(e => e.ym === ym).reduce((s, e) => s + (+e.amount || 0), 0);
+    const prv = (data.expenses || []).filter(e => e.ym === prevYm).reduce((s, e) => s + (+e.amount || 0), 0);
+    const byCatIn = m => {
+      const o = {};
+      (data.expenses || []).filter(e => e.ym === m && e.catId).forEach(e => o[e.catId] = (o[e.catId] || 0) + (+e.amount || 0));
+      return o;
+    };
+    return {
+      prevYm,
+      cur,
+      prv,
+      hasPrev: prv > 0,
+      curByCat: byCatIn(ym),
+      prvByCat: byCatIn(prevYm)
+    };
+  } catch (e) {
+    return null;
+  }
+}
 function buildInsights(data, calc, ym) {
   const out = [];
   const ins = budgetInsights(calc, ym);
+  const rep = monthReport(data, calc, ym);
+  const trend = monthTrend(data, ym);
+  const monthEnded = ymIndex(ym) < ymIndex(todayYM());
+  // ===== חודש שהסתיים: תובנות סיכום ייעודיות =====
+  if (monthEnded) {
+    if (rep.goal > 0 && rep.goalMet) out.push({
+      id: `sum-goal:${ym}`,
+      level: "green",
+      icon: "🐷",
+      title: `יעד החיסכון הושג — ${shekel(rep.saved)} נשמרו`,
+      desc: (calc.projected || 0) > rep.goal ? `חסכת ${shekel((calc.projected || 0) - rep.goal)} יותר מהיעד.` : "כל הכבוד על העמידה ביעד.",
+      primary: {
+        label: "פירוט החודש",
+        act: {
+          kind: "savings"
+        }
+      }
+    });else if (rep.goal > 0) out.push({
+      id: `sum-nogoal:${ym}`,
+      level: "blue",
+      icon: "🐷",
+      title: "לא נשמרה יתרה לחיסכון בחודש זה",
+      desc: `היעד היה ${shekel(rep.goal)}.`,
+      primary: {
+        label: "פירוט החודש",
+        act: {
+          kind: "savings"
+        }
+      }
+    });
+    if (rep.over.length === 0 && rep.flex.length > 0) out.push({
+      id: `sum-clean:${ym}`,
+      level: "green",
+      icon: "🏆",
+      title: "כל התקציבים נשמרו החודש",
+      desc: "לא הייתה אף חריגה — חודש מצוין."
+    });
+    if (rep.surplus.length > 0) out.push({
+      id: `sum-surplus:${ym}`,
+      level: "green",
+      icon: "💰",
+      title: `נשארו ${shekel(rep.surplusTot)} שלא נוצלו מהתקציבים`,
+      desc: `התקציב עם היתרה הגדולה: ${rep.surplus[0].b.name} (+${shekel(rep.surplus[0].amount)}).`,
+      primary: {
+        label: "פתח תקציב",
+        act: {
+          kind: "budget",
+          id: rep.surplus[0].b.id
+        }
+      }
+    });
+    if (rep.over.length > 0) out.push({
+      id: `sum-over:${ym}`,
+      level: "red",
+      icon: "⚠️",
+      title: `החריגה הגדולה הייתה ב${rep.over[0].b.name}`,
+      desc: `חריגה של ${shekel(rep.over[0].amount)} · סה״כ חריגות ${shekel(rep.overTot)}.`,
+      primary: {
+        label: "פתח תקציב",
+        act: {
+          kind: "budget",
+          id: rep.over[0].b.id
+        }
+      }
+    });
+    if (rep.topCat) out.push({
+      id: `sum-topcat:${ym}:${rep.topCat.cat.id}`,
+      level: "blue",
+      icon: rep.topCat.cat.emoji || "🏠",
+      title: `הקטגוריה שהכבידה ביותר: ${rep.topCat.cat.name}`,
+      desc: `${Math.round(rep.topCat.share)}% מההוצאות (${shekel(rep.topCat.amount)}).`,
+      primary: {
+        label: "צפה בקטגוריה",
+        act: {
+          kind: "cat",
+          id: rep.topCat.cat.id
+        }
+      }
+    });
+    if (rep.biggest) out.push({
+      id: `sum-biggest:${ym}:${rep.biggest.id}`,
+      level: "blue",
+      icon: rep.biggest.emoji || "💳",
+      title: `ההוצאה הגדולה החודש: ${rep.biggest.name}`,
+      desc: shekel(+rep.biggest.amount || 0),
+      primary: {
+        label: "פתח הוצאה",
+        act: {
+          kind: "expense",
+          id: rep.biggest.id
+        }
+      }
+    });
+    if (rep.count > 0) out.push({
+      id: `sum-stats:${ym}`,
+      level: "blue",
+      icon: "📅",
+      title: `החודש היו ${rep.count} הוצאות`,
+      desc: `ממוצע יומי ${shekel(rep.dailyAvg)} · ${Math.round(rep.budgetedPct)}% מההוצאות היו מתוקצבות.`
+    });
+    if (trend && trend.hasPrev && Math.abs(trend.cur - trend.prv) > 50) {
+      const diff = trend.prv - trend.cur;
+      out.push({
+        id: `sum-trend:${ym}`,
+        level: diff > 0 ? "green" : "yellow",
+        icon: diff > 0 ? "📉" : "📈",
+        title: diff > 0 ? `הוצאת ${shekel(diff)} פחות מהחודש הקודם` : `הוצאת ${shekel(-diff)} יותר מהחודש הקודם`,
+        desc: `סה״כ ${shekel(trend.cur)} מול ${shekel(trend.prv)}.`
+      });
+    }
+    return out;
+  }
+  // ===== חודש חי: מגמות ועסקאות (בנוסף לתובנות התפעוליות) =====
+  if (trend && trend.hasPrev) {
+    Object.keys(trend.curByCat).forEach(cid => {
+      const cur = trend.curByCat[cid],
+        prv = trend.prvByCat[cid] || 0;
+      if (prv < 100 || cur < 100) return;
+      const pct = Math.round((cur - prv) / prv * 100);
+      if (pct >= 18) {
+        const c = (data.categories || []).find(x => x.id === cid);
+        if (c) out.push({
+          id: `trend-up:${ym}:${cid}:${pct}`,
+          level: "yellow",
+          icon: "📈",
+          title: `ההוצאות על ${c.name} עלו ב-${pct}% לעומת החודש הקודם`,
+          desc: `${shekel(cur)} מול ${shekel(prv)}.`,
+          primary: {
+            label: "צפה בקטגוריה",
+            act: {
+              kind: "cat",
+              id: cid
+            }
+          }
+        });
+      }
+    });
+  }
+  // עסקאות תשלומים שמסתיימות
+  const instGroups = {};
+  (data.expenses || []).forEach(e => {
+    if (e.installments && e.installments.id) {
+      const g = instGroups[e.installments.id] || (instGroups[e.installments.id] = []);
+      g.push(e);
+    }
+  });
+  Object.keys(instGroups).forEach(gid => {
+    const g = instGroups[gid];
+    const last = g.slice().sort((a, b) => ymIndex(b.ym) - ymIndex(a.ym))[0];
+    if (!last) return;
+    if (last.ym === ym) out.push({
+      id: `inst-last:${gid}:${ym}`,
+      level: "blue",
+      icon: "🧾",
+      title: `נותר תשלום אחרון לעסקת ${last.name}`,
+      desc: `לאחר החודש משתחרר סכום של ${shekel(+last.amount || 0)} בחודש.`,
+      primary: {
+        label: "פתח עסקה",
+        act: {
+          kind: "expense",
+          id: last.id
+        }
+      }
+    });else if (ymIndex(last.ym) === ymIndex(ym) - 1) out.push({
+      id: `inst-done:${gid}:${ym}`,
+      level: "green",
+      icon: "🎉",
+      title: `סיימת לשלם על העסקה "${last.name}"`,
+      desc: `מהחודש משתחרר תקציב של ${shekel(+last.amount || 0)}.`
+    });
+  });
+  // חיסכון — חודש חי
+  if (rep.goal > 0) {
+    if (rep.goalMet) out.push({
+      id: `goal-met:${ym}`,
+      level: "green",
+      icon: "🐷",
+      title: "יעד החיסכון הושג",
+      desc: `${shekel(rep.saved)} מיועדים לחיסכון החודש.`
+    });else if ((calc.projected || 0) > 0) out.push({
+      id: `goal-gap:${ym}:${Math.round(rep.goal - rep.saved)}`,
+      level: "yellow",
+      icon: "🎯",
+      title: `נשארו עוד ${shekel(rep.goal - rep.saved)} כדי לעמוד ביעד החיסכון`,
+      desc: "אם לא יתווספו הוצאות נוספות, תתקרב ליעד."
+    });else out.push({
+      id: `goal-none:${ym}`,
+      level: "red",
+      icon: "🐷",
+      title: "החודש לא צפויה יתרה לחיסכון",
+      desc: `היעד שהוגדר הוא ${shekel(rep.goal)}.`
+    });
+  }
+  // תקציב שנשארה בו יתרה קטנה (אזהרה)
+  rep.flex.forEach(b => {
+    const left = (+b.target || 0) - (calc.usedByBudget[b.id] || 0);
+    const t = +b.target || 0;
+    if (t > 0 && left > 0 && left <= Math.max(50, t * 0.1)) out.push({
+      id: `low:${b.id}:${ym}:${Math.round(left)}`,
+      level: "red",
+      icon: "⚠️",
+      title: `נותרו רק ${shekel(left)} בתקציב ${b.name}`,
+      desc: `נוצלו ${Math.round((calc.usedByBudget[b.id] || 0) / t * 100)}% מהתקציב.`,
+      primary: {
+        label: "פתח תקציב",
+        act: {
+          kind: "budget",
+          id: b.id
+        }
+      }
+    });
+  });
+  // חריגה בפועל בתקציב מסוים
+  rep.over.forEach(x => out.push({
+    id: `over:${x.b.id}:${ym}:${Math.round(x.amount)}`,
+    level: "red",
+    icon: "⚠️",
+    title: `חרגת מתקציב ${x.b.name} ב-${shekel(x.amount)}`,
+    desc: "כדאי לבדוק את ההוצאות בתקציב זה.",
+    primary: {
+      label: "פתח תקציב",
+      act: {
+        kind: "budget",
+        id: x.b.id
+      }
+    }
+  }));
   const ubList = calc.active.filter(e => !e.budgetId);
   const overCount = calc.budgets.filter(b => !b.fixed && (calc.usedByBudget[b.id] || 0) > (+b.target || 0)).length;
   if (ubList.length > 0) out.push({
@@ -3190,6 +3526,91 @@ function RingsCarousel({
 
   // ---- כל הרינגים שהמערכת מציעה, לפי סדר חשיבות. נאגור רק את מה שיש בו מידע אמיתי ----
   const ringList = [];
+  // ===== חודש שהסתיים: דוח ביצועים דינמי — רק רינגים שיש בהם ערך =====
+  if (ymIndex(ym) < ymIndex(todayYM())) {
+    const rep = monthReport(data, calc, ym);
+    if (rep.surplus.length > 0) ringList.push({
+      pct: 100,
+      center: String(rep.surplus.length),
+      color: EMERALD,
+      label: "🟢 השאירו יתרה",
+      value: "תקציבים",
+      open: "sumSurplus"
+    });
+    if (rep.over.length > 0) ringList.push({
+      pct: 100,
+      center: String(rep.over.length),
+      color: RED,
+      label: "🔴 שחרגו",
+      value: "תקציבים",
+      open: "sumOver"
+    });else if (rep.flex.length > 0) ringList.push({
+      pct: 100,
+      center: "✓",
+      color: EMERALD,
+      label: "🏆 כל התקציבים",
+      value: "נשמרו החודש",
+      open: "sumSurplus"
+    });
+    if (rep.goal > 0) ringList.push({
+      pct: rep.goal > 0 ? Math.min(100, rep.saved / rep.goal * 100) : 0,
+      center: rep.goalMet ? "100%" : Math.round(rep.saved / rep.goal * 100) + "%",
+      color: rep.goalMet ? EMERALD : RED,
+      label: "🐷 יעד החיסכון",
+      value: rep.goalMet ? "נשמר לחיסכון" : "לא נשמר במלואו",
+      open: "sumSavings"
+    });
+    if (rep.biggest) ringList.push({
+      pct: rep.total > 0 ? Math.min(100, (+rep.biggest.amount || 0) / rep.total * 100) : 0,
+      center: Math.round(rep.total > 0 ? (+rep.biggest.amount || 0) / rep.total * 100 : 0) + "%",
+      color: GREEN,
+      label: `${rep.biggest.emoji || "💳"} ${clip(rep.biggest.name || "הוצאה")}`,
+      value: "ההוצאה הגדולה",
+      open: "sumTopExp"
+    });
+    if (rep.topCat) ringList.push({
+      pct: Math.min(100, rep.topCat.share),
+      center: Math.round(rep.topCat.share) + "%",
+      color: PURPLE,
+      label: `${rep.topCat.cat.emoji || "🏆"} ${clip(rep.topCat.cat.name)}`,
+      value: "הקטגוריה הגדולה",
+      open: {
+        cat: rep.topCat.cat
+      }
+    });
+    if (rep.total > 0) ringList.push({
+      pct: rep.budgetedPct,
+      center: Math.round(rep.budgetedPct) + "%",
+      color: rep.budgetedPct >= 75 ? EMERALD : AMBER,
+      label: "📊 מתוקצב",
+      value: "מסך ההוצאות",
+      open: "sumSplit"
+    });
+    // ⭐ רינג דינמי — תובנה משתנה לפי מה שמעניין בחודש הזה
+    if (rep.count > 0) ringList.push({
+      pct: 100,
+      center: String(rep.count),
+      color: GREEN,
+      label: "🧾 הוצאות",
+      value: `ממוצע יומי ${shekel(rep.dailyAvg)}`,
+      open: "sumTopExp"
+    });
+    if (!ringList.length) ringList.push({
+      pct: 0,
+      center: "—",
+      color: GREEN,
+      label: "📊 אין נתונים",
+      value: "לא היו הוצאות החודש",
+      open: null
+    });
+    const endedPages = [];
+    for (let i = 0; i < ringList.length; i += 3) endedPages.push(ringList.slice(i, i + 3));
+    return /*#__PURE__*/React.createElement(Carousel, {
+      pages: endedPages,
+      onRing: onRing,
+      activeRing: activeRing
+    });
+  }
   if (ins.closest) ringList.push({
     pct: Math.min(100, ins.closest.ratio * 100),
     center: usagePctText(ins.closest.used, ins.closest.target),
@@ -3376,7 +3797,128 @@ function RingDetail({
   let title = "תובנה",
     body = null,
     openBudget = null;
-  if (ring === "closest") {
+  const repD = monthReport(data, calc, ym);
+  if (ring === "sumSurplus") {
+    title = repD.over.length === 0 ? "כל התקציבים נשמרו" : "תקציבים שהשאירו יתרה";
+    body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "text-center mb-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-extrabold text-[30px] leading-none tabular-nums",
+      style: {
+        color: EMERALD
+      }
+    }, "+", shekel(repD.surplusTot)), /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] text-stone-400 mt-1"
+    }, "סה״כ נשאר מתקציבים")), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, repD.surplus.length ? repD.surplus.map(x => /*#__PURE__*/React.createElement(Row, {
+      key: x.b.id,
+      emoji: x.b.emoji,
+      name: x.b.name,
+      sub: `נוצל ${shekel(calc.usedByBudget[x.b.id] || 0)} מתוך ${shekel(+x.b.target || 0)}`,
+      right: "+" + shekel(x.amount),
+      rightColor: EMERALD,
+      onTap: () => onOpenBudget && onOpenBudget(x.b)
+    })) : /*#__PURE__*/React.createElement("div", {
+      className: "text-center text-stone-400 text-[13px] py-6"
+    }, "לא נשארה יתרה בתקציבים החודש.")));
+  } else if (ring === "sumOver") {
+    title = "תקציבים שחרגו";
+    body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "text-center mb-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-extrabold text-[30px] leading-none tabular-nums",
+      style: {
+        color: RED
+      }
+    }, "−", shekel(repD.overTot)), /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] text-stone-400 mt-1"
+    }, "סה״כ חריגה")), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, repD.over.map(x => /*#__PURE__*/React.createElement(Row, {
+      key: x.b.id,
+      emoji: x.b.emoji,
+      name: x.b.name,
+      sub: `נוצל ${shekel(calc.usedByBudget[x.b.id] || 0)} מתוך ${shekel(+x.b.target || 0)}`,
+      right: "−" + shekel(x.amount),
+      rightColor: RED,
+      onTap: () => onOpenBudget && onOpenBudget(x.b)
+    }))));
+  } else if (ring === "sumSavings") {
+    title = "יעד החיסכון";
+    body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "text-center mb-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-extrabold text-[30px] leading-none tabular-nums",
+      style: {
+        color: repD.goalMet ? EMERALD : RED
+      }
+    }, shekel(repD.saved)), /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] text-stone-400 mt-1"
+    }, repD.goalMet ? "נשמר לחיסכון — היעד הושג" : `מתוך יעד של ${shekel(repD.goal)}`)), /*#__PURE__*/React.createElement(Flow, {
+      steps: [{
+        k: "יתרה לפני חיסכון",
+        v: calc.projected || 0,
+        neg: (calc.projected || 0) < 0
+      }, {
+        k: "נשמר לחיסכון",
+        v: repD.saved,
+        sign: "−"
+      }, {
+        k: "נותר בסוף החודש",
+        v: (calc.projected || 0) - repD.saved,
+        strong: true,
+        neg: (calc.projected || 0) - repD.saved < 0
+      }]
+    }));
+  } else if (ring === "sumTopExp") {
+    title = "ההוצאות הגדולות החודש";
+    body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "text-center mb-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-extrabold text-[30px] leading-none tabular-nums",
+      style: {
+        color: INK
+      }
+    }, shekel(repD.total)), /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] text-stone-400 mt-1"
+    }, `${repD.count} הוצאות · ממוצע יומי ${shekel(repD.dailyAvg)}`)), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, repD.topExpenses.map(e => /*#__PURE__*/React.createElement(Row, {
+      key: e.id,
+      emoji: e.emoji || "🧾",
+      name: e.name || "הוצאה",
+      sub: isISO(e.date) ? fmtDate(e.date) : null,
+      right: shekel(+e.amount || 0),
+      onTap: onEditExpense ? () => onEditExpense(e) : undefined
+    }))));
+  } else if (ring === "sumSplit") {
+    title = "התפלגות ההוצאות";
+    body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "text-center mb-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-extrabold text-[30px] leading-none tabular-nums",
+      style: {
+        color: repD.budgetedPct >= 75 ? EMERALD : AMBER
+      }
+    }, Math.round(repD.budgetedPct), "%"), /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] text-stone-400 mt-1"
+    }, "מההוצאות היו מתוך תקציבים")), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, /*#__PURE__*/React.createElement(Row, {
+      emoji: "🎯",
+      name: "מתוקצב",
+      sub: `${Math.round(repD.budgetedPct)}% מההוצאות`,
+      right: shekel(repD.budgeted),
+      rightColor: EMERALD
+    }), /*#__PURE__*/React.createElement(Row, {
+      emoji: "🧾",
+      name: "לא מתוקצב",
+      sub: `${Math.round(100 - repD.budgetedPct)}% מההוצאות`,
+      right: shekel(repD.unbudgeted),
+      rightColor: AMBER
+    })));
+  } else if (ring === "closest") {
     const g = ins.closest;
     title = g && g.atRisk ? "בסיכון לפי הקצב" : "קרוב לתקציב";
     if (!g) {
@@ -4218,8 +4760,8 @@ function InsightsSheet({
   const unread = bySev(insights.filter(i => !readMap[i.id]));
   const read = bySev(insights.filter(i => readMap[i.id]));
   const ordered = [...unread, ...read];
-  const dot = lvl => lvl === "red" ? RED : lvl === "yellow" ? AMBER : GREEN;
-  const bg = lvl => lvl === "red" ? "rgba(180,35,24,0.10)" : lvl === "yellow" ? "rgba(245,160,40,0.14)" : "rgba(47,111,237,0.14)";
+  const dot = lvl => lvl === "red" ? RED : lvl === "yellow" ? AMBER : lvl === "green" ? EMERALD : GREEN;
+  const bg = lvl => lvl === "red" ? "rgba(180,35,24,0.10)" : lvl === "yellow" ? "rgba(245,160,40,0.14)" : lvl === "green" ? "rgba(23,160,94,0.13)" : "rgba(47,111,237,0.14)";
   const dismiss = id => {
     setExiting(e => ({
       ...e,
@@ -7964,6 +8506,7 @@ function IncomeEditor({
 }
 function IncomeSourceForm({
   editing,
+  ym,
   onSave,
   onDelete,
   onBack,
@@ -7972,24 +8515,32 @@ function IncomeSourceForm({
   const [name, setName] = useState(editing?.name || "");
   const [emoji, setEmoji] = useState(editing?.emoji || "💰");
   const [amount, setAmount] = useState(String(editing?.amount || ""));
-  const [date, setDate] = useState(isISO(editing?.date) ? editing.date : todayISO());
-  const [recur, setRecur] = useState(editing ? !!(editing.recur && +editing.recur.freq) : true);
+  // תאריך ברירת מחדל = החודש המוצג (לא "היום"), כדי שהכנסה שנוספת בחודש קודם תישמר לאותו חודש
+  const defaultIncomeDate = ym && ym !== todayYM() ? ym + "-05" : todayISO();
+  const [date, setDate] = useState(isISO(editing?.date) ? editing.date : defaultIncomeDate);
+  const [recur, setRecur] = useState(editing ? !!(editing.recur && +editing.recur.freq) : false);
   const [freq, setFreq] = useState(editing && editing.recur && +editing.recur.freq || 1);
   const [note, setNote] = useState(editing?.note || "");
   const isEdit = !!editing;
   const valid = +amount > 0;
   const save = () => {
     if (!valid) return;
+    const srcYm = date.slice(0, 7);
     onSave({
       id: editing && editing.id || uid(),
       name: name.trim() || "הכנסה",
       emoji: emoji || "💰",
       amount: +amount || 0,
       date,
-      ym: date.slice(0, 7),
+      ym: srcYm,
       recur: recur ? {
         freq: +freq || 1
       } : null,
+      // הכנסה קבועה חלה מהחודש שנבחר והלאה; חד־פעמית שייכת רק לחודש שלה.
+      // רכיב ישן שנערך (ללא startYm) נשאר ללא חותמת — כדי לא לאפס לו חודשי עבר.
+      ...(recur && !(isEdit && !editing.startYm) ? {
+        startYm: editing && editing.startYm || srcYm
+      } : {}),
       note: note.trim()
     });
   };
@@ -10070,7 +10621,15 @@ function App() {
           type: "catDetail",
           cat: c
         });
-      } else if (act.kind === "newBudget") setModal({
+      } else if (act.kind === "expense") {
+        const e = (data.expenses || []).find(x => x.id === act.id);
+        if (e) setModal({
+          type: "expenseForm",
+          editing: e
+        });
+      } else if (act.kind === "savings") setModal({
+        type: "forecastDetail"
+      });else if (act.kind === "newBudget") setModal({
         type: "budgetForm",
         prefill: {
           name: act.name,
@@ -11438,6 +11997,7 @@ function App() {
     onClose: closeModal
   }), modal?.type === "incomeSource" && /*#__PURE__*/React.createElement(IncomeSourceForm, {
     editing: modal.editing,
+    ym: ym,
     onSave: src => {
       const prev = data;
       const isEdit = (data.incomeSources || []).some(x => x.id === src.id);
