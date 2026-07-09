@@ -1624,11 +1624,17 @@ function usagePctText(used, target) {
 }
 function incomeApplies(src, ym) {
   const sy = src.ym || (isISO(src.date) ? src.date.slice(0, 7) : todayYM());
+  // גבולות מפורשים (אם הוגדרו) — תוספתי, לא נדרש בנתונים קיימים
+  if (src.startYm && ymIndex(ym) < ymIndex(src.startYm)) return false;
+  if (src.endYm && ymIndex(ym) >= ymIndex(src.endYm)) return false;
   if (src.recur && +src.recur.freq) {
+    // הכנסה חוזרת חלה בכל חודש שתואם לתדירות — גם לפני חודש העוגן.
+    // (העוגן נקבע בעת יצירת הרכיב, ולכן חודשי עבר הציגו 0 בטעות.)
+    const f = Math.max(1, +src.recur.freq);
     const di = ymIndex(ym) - ymIndex(sy);
-    return di >= 0 && di % Math.max(1, +src.recur.freq) === 0;
+    return (di % f + f) % f === 0;
   }
-  return sy === ym; // חד־פעמי
+  return sy === ym; // חד־פעמי — רק בחודש שלו
 }
 function incomeSourcesFor(data, ym) {
   return (data.incomeSources || []).filter(s => incomeApplies(s, ym));
@@ -2018,7 +2024,8 @@ function ForecastDetail({
   const POS = "#17a05e",
     NEG = "#b42318",
     MUT = "#8a8681";
-  const actualMode = mode === "actual";
+  const monthEnded = ymIndex(ym) < ymIndex(todayYM()); // חודש שהסתיים → שפת "סיכום", לא תחזית
+  const actualMode = monthEnded ? false : mode === "actual";
   const income = calc.income || 0;
   const targetsTotal = calc.targetsTotal || 0;
   const overspend = calc.overspend || 0;
@@ -2058,12 +2065,12 @@ function ForecastDetail({
     name: b.name || "תקציב",
     amount: (+b.target || 0) - (realByBud[b.id] || 0),
     emoji: b.emoji
-  })).filter(x => x.amount > 0.5);
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const overActualItems = flexDue.map(b => ({
     name: b.name || "תקציב",
     amount: (realByBud[b.id] || 0) - (+b.target || 0),
     emoji: b.emoji
-  })).filter(x => x.amount > 0.5);
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const surplusTot = surplusItems.reduce((s, x) => s + x.amount, 0);
   const overActualTot = overActualItems.reduce((s, x) => s + x.amount, 0);
   // חריגות — צפי (כולל עתידי)
@@ -2081,7 +2088,7 @@ function ForecastDetail({
   const bottom = actualMode ? remainingNow : finalLeft;
   const projNeg = projected < -0.5;
   const finalPos = !projNeg && finalLeft > 0.5;
-  const heroLabel = actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
+  const heroLabel = monthEnded ? projNeg ? "החודש הסתיים במינוס" : finalPos ? "נותרו בסוף החודש" : "החודש הסתיים באיזון" : actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
   const SecHead = t => h("div", {
     className: "text-[11px] font-bold tracking-wide text-stone-400 mt-3.5 mb-1.5 px-1"
   }, t);
@@ -2168,7 +2175,7 @@ function ForecastDetail({
       margin: "5px 0"
     }
   });
-  const varianceRows = actualMode ? [surplusTot > 0.5 ? Row({
+  const varianceRows = actualMode || monthEnded ? [surplusTot > 0.5 ? Row({
     label: "יתרה מתקציבים",
     amount: surplusTot,
     color: POS,
@@ -2190,7 +2197,40 @@ function ForecastDetail({
     items: overItems,
     k: "over"
   }) : null;
-  const summaryRows = actualMode ? [Row({
+  const summaryRows = monthEnded ? projNeg ? [Row({
+    label: "החודש הסתיים במינוס",
+    amount: projected,
+    color: NEG,
+    sign: "−",
+    strong: true,
+    k: "fin"
+  })] : [Row({
+    label: "יתרה לפני חיסכון",
+    amount: projected,
+    color: projected < 0 ? NEG : POS,
+    sign: projected < 0 ? "−" : "",
+    k: "bal"
+  }), effectiveSavings > 0.5 ? Row({
+    label: "נשמר לחיסכון",
+    amount: effectiveSavings,
+    color: MUT,
+    sign: "−",
+    icon: "🐷",
+    k: "goal"
+  }) : (+data.savingsGoal || 0) > 0 ? Row({
+    label: "לא נשאר לחיסכון",
+    amount: 0,
+    color: MUT,
+    icon: "🐷",
+    k: "goal"
+  }) : null, divider(), Row({
+    label: finalPos ? "נותר בסוף החודש" : "לא נותרה יתרה בסוף החודש",
+    amount: finalLeft,
+    color: finalLeft < 0 ? NEG : POS,
+    sign: finalLeft < 0 ? "−" : "",
+    strong: true,
+    k: "fin2"
+  })] : actualMode ? [Row({
     label: remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "חריגה כרגע" : "כרגע מאוזן",
     amount: remainingNow,
     color: remainingNow < 0 ? NEG : POS,
@@ -2225,20 +2265,20 @@ function ForecastDetail({
     strong: true,
     k: "fin2"
   })];
-  const infoText = actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
-  const infoShort = actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
+  const infoText = monthEnded ? "החודש הסתיים, ולכן המספרים הם נתוני אמת: ההכנסות מול ההוצאות שיצאו בפועל. תקציבי המעקב מחושבים לפי מה שבאמת יצא, ולא לפי היעד." : actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
+  const infoShort = monthEnded ? "נתוני אמת — כך הסתיים החודש בפועל." : actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
   return h(Sheet, {
-    title: "פירוט התחזית החודשית",
+    title: monthEnded ? "סיכום חודשי" : "פירוט התחזית החודשית",
     onClose: onClose
   }, h("div", {
     className: "flex justify-center mb-1"
   }, h("span", {
     className: "inline-flex items-center gap-1 rounded-full px-3.5 py-1 text-[11px] font-bold",
     style: {
-      background: actualMode ? "rgba(23,160,94,0.12)" : "rgba(47,111,237,0.12)",
-      color: actualMode ? POS : GREEN
+      background: monthEnded ? "rgba(122,134,158,0.12)" : actualMode ? "rgba(23,160,94,0.12)" : "rgba(47,111,237,0.12)",
+      color: monthEnded ? INK : actualMode ? POS : GREEN
     }
-  }, actualMode ? "📊 המצב בפועל" : "📈 צפי סוף חודש")), h("div", {
+  }, monthEnded ? "📊 סיכום חודשי" : actualMode ? "📊 המצב בפועל" : "📈 צפי סוף חודש")), h("div", {
     className: "text-center pt-0.5 pb-2"
   }, h("div", {
     className: "text-[12px] text-stone-500 mb-1"
@@ -2273,7 +2313,7 @@ function ForecastDetail({
     items: incomeItems,
     k: "inc"
   })), SecHead("הוצאות"), card(Row({
-    label: "תקציבי מעקב",
+    label: monthEnded ? "תקציבי מעקב (בפועל)" : "תקציבי מעקב",
     amount: targetsTotal,
     color: NEG,
     sign: "−",
@@ -2295,6 +2335,7 @@ function ForecastDetail({
 
 function MonthCard({
   calc,
+  ym,
   savingsGoal,
   mode,
   onMode,
@@ -2302,13 +2343,14 @@ function MonthCard({
   onEditGoal,
   onForecast
 }) {
-  const actual = mode === "actual";
+  const monthEnded = ym ? ymIndex(ym) < ymIndex(todayYM()) : false; // חודש שהסתיים → שפת סיכום
+  const actual = monthEnded ? false : mode === "actual"; // בחודש שהסתיים אין הפרדה בין "בפועל" ל"סיכום"
   const goalAmt = +savingsGoal || 0;
   const savedAmt = Math.min(goalAmt, Math.max(0, calc.projected)); // כמה באמת נשמר לחיסכון (חסום ליתרה הזמינה)
   const netAvail = calc.projected - savedAmt; // הכסף שבאמת נשאר פנוי לשימוש
   const over = actual ? calc.remainingNow < 0 : netAvail < 0;
   const mainVal = actual ? calc.remainingNow : netAvail;
-  const label = actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
+  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "נותרו בסוף החודש" : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
   const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה`;
   const rows = actual ? [{
     k: "הכנסה",
@@ -2325,7 +2367,7 @@ function MonthCard({
     c: GREEN,
     edit: true
   }, {
-    k: "תקציבים מתוכננים",
+    k: monthEnded ? "תקציבים (בפועל)" : "תקציבים מתוכננים",
     v: -calc.targetsTotal,
     c: INK
   }];
@@ -2343,7 +2385,13 @@ function MonthCard({
   return /*#__PURE__*/React.createElement("div", {
     className: "rounded-3xl p-4",
     style: glass()
-  }, /*#__PURE__*/React.createElement(Segmented, {
+  }, monthEnded ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-1.5 rounded-2xl h-9 text-[13px] font-bold",
+    style: {
+      background: "rgba(122,134,158,0.10)",
+      color: INK
+    }
+  }, "📊 סיכום חודשי") : /*#__PURE__*/React.createElement(Segmented, {
     value: mode,
     onChange: onMode,
     options: [{
@@ -2460,7 +2508,7 @@ function MonthCard({
       msg = "הגדירו יעד";
     } else if (room <= 0) {
       gt = S.red;
-      goalLabel = "לא נשאר לחיסכון";
+      goalLabel = monthEnded ? "לא נשאר לחיסכון" : "לא נשאר לחיסכון";
       amount = 0;
       msg = `מתוך ${shekel(intended)}`;
     } else if (effective < intended) {
@@ -5883,6 +5931,11 @@ function ExpenseForm({
         budgetId: budgetId || null,
         note
       };
+      // שינוי תאריך של תשלום בודד — חל רק עליו, לא על שאר הסדרה
+      const dateFor = isISO(date) && date !== editing.date ? {
+        id: editing.id,
+        date
+      } : null;
       const total = +amount; // amount = סכום העסקה הכולל
       const amountChanged = Math.round(total) !== Math.round(instTotal);
       const countChanged = instCount !== instEdit.n;
@@ -5893,6 +5946,7 @@ function ExpenseForm({
           meta,
           total,
           targetCount,
+          dateFor,
           newCount: countChanged ? instCount : null
         });
         return;
@@ -5905,6 +5959,7 @@ function ExpenseForm({
           meta,
           newAmount: per,
           applyAll: true,
+          dateFor,
           newCount: countChanged ? instCount : null
         });
         return;
@@ -5913,6 +5968,7 @@ function ExpenseForm({
         gid: instEdit.id,
         meta,
         newAmount: null,
+        dateFor,
         newCount: null
       });
       return;
@@ -6462,6 +6518,7 @@ function ExpenseForm({
         meta: c.meta,
         newAmount: per,
         applyAll: false,
+        dateFor: c.dateFor,
         newCount: c.newCount
       });
     },
@@ -6486,6 +6543,7 @@ function ExpenseForm({
         meta: c.meta,
         newAmount: per,
         applyAll: true,
+        dateFor: c.dateFor,
         newCount: c.newCount
       });
     },
@@ -10093,7 +10151,8 @@ function App() {
     meta,
     newAmount,
     newCount,
-    applyAll
+    applyAll,
+    dateFor
   }) => {
     const prev = data;
     const cur = todayYM(),
@@ -10112,6 +10171,11 @@ function App() {
           if (meta.catId != null) upd.catId = meta.catId;
           upd.budgetId = meta.budgetId != null ? meta.budgetId : null;
           if (meta.note != null) upd.note = meta.note;
+        }
+        // שינוי תאריך חל רק על התשלום שנערך — שאר התשלומים בסדרה לא נוגעים
+        if (dateFor && dateFor.id === x.id && isISO(dateFor.date)) {
+          upd.date = dateFor.date;
+          upd.ym = dateFor.date.slice(0, 7);
         }
         // שינוי סכום: כברירת מחדל רק תשלומים עתידיים; applyAll=true → גם תשלומים שכבר ירדו (עדכון רטרואקטיבי מפורש)
         if (newAmount != null && (applyAll || !isPaid(x))) upd.amount = newAmount;
@@ -10560,6 +10624,7 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement(MonthCard, {
     calc: calc,
+    ym: ym,
     savingsGoal: data.savingsGoal,
     mode: mode,
     onMode: setMode,

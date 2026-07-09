@@ -1624,11 +1624,17 @@ function usagePctText(used, target) {
 }
 function incomeApplies(src, ym) {
   const sy = src.ym || (isISO(src.date) ? src.date.slice(0, 7) : todayYM());
+  // גבולות מפורשים (אם הוגדרו) — תוספתי, לא נדרש בנתונים קיימים
+  if (src.startYm && ymIndex(ym) < ymIndex(src.startYm)) return false;
+  if (src.endYm && ymIndex(ym) >= ymIndex(src.endYm)) return false;
   if (src.recur && +src.recur.freq) {
+    // הכנסה חוזרת חלה בכל חודש שתואם לתדירות — גם לפני חודש העוגן.
+    // (העוגן נקבע בעת יצירת הרכיב, ולכן חודשי עבר הציגו 0 בטעות.)
+    const f = Math.max(1, +src.recur.freq);
     const di = ymIndex(ym) - ymIndex(sy);
-    return di >= 0 && di % Math.max(1, +src.recur.freq) === 0;
+    return (di % f + f) % f === 0;
   }
-  return sy === ym; // חד־פעמי
+  return sy === ym; // חד־פעמי — רק בחודש שלו
 }
 function incomeSourcesFor(data, ym) {
   return (data.incomeSources || []).filter(s => incomeApplies(s, ym));
@@ -1664,7 +1670,7 @@ function applyIncome(d, ym, v, scope) {
 /* ============================ חישובים ============================ */
 function useCalc(data, ym) {
   return useMemo(() => {
-    const budgets = (data.budgets || []).filter(b => !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm))).map(b => {
+    const budgets = (data.budgets || []).filter(b => !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm)) && !(b.onlyMonth && b.onlyMonth !== ym)).map(b => {
       const mt = b.targetByMonth && b.targetByMonth[ym];
       return mt != null && mt !== "" ? {
         ...b,
@@ -1736,10 +1742,12 @@ function useCalc(data, ym) {
     // תקציב פתוח — היעד נשאר כרגיל. תקציב קבוע — לא נעילה. היעד עצמו לא משתנה (רק החישוב).
     const lockedByBudget = {},
       effTargetByBudget = {};
+    const monthEnded = ymIndex(ym) < ymIndex(todayYM()); // חודש שהסתיים → חישובי אמת בלבד (לא תחזית)
     budgets.forEach(b => {
       const lk = isBudgetLocked(b, ym);
       lockedByBudget[b.id] = lk;
-      effTargetByBudget[b.id] = b.fixed ? +b.target || 0 : lk ? usedByBudget[b.id] || 0 : +b.target || 0;
+      const actualOnly = lk || !b.fixed && monthEnded; // נעול, או תקציב מעקב בחודש שהסתיים
+      effTargetByBudget[b.id] = b.fixed ? +b.target || 0 : actualOnly ? usedByBudget[b.id] || 0 : +b.target || 0;
     });
     const targetsTotal = budgets.reduce((s, b) => s + (b.fixed ? dueByBudget[b.id] ? +b.target || 0 : 0 : effTargetByBudget[b.id]), 0);
     const fixedTotal = budgets.filter(b => b.fixed && dueByBudget[b.id]).reduce((s, b) => s + (+b.target || 0), 0);
@@ -2016,7 +2024,8 @@ function ForecastDetail({
   const POS = "#17a05e",
     NEG = "#b42318",
     MUT = "#8a8681";
-  const actualMode = mode === "actual";
+  const monthEnded = ymIndex(ym) < ymIndex(todayYM()); // חודש שהסתיים → שפת "סיכום", לא תחזית
+  const actualMode = monthEnded ? false : mode === "actual";
   const income = calc.income || 0;
   const targetsTotal = calc.targetsTotal || 0;
   const overspend = calc.overspend || 0;
@@ -2042,25 +2051,26 @@ function ForecastDetail({
     name: b.name || "תקציב",
     amount: calc.effTargetByBudget && calc.effTargetByBudget[b.id] != null ? calc.effTargetByBudget[b.id] : +b.target || 0,
     emoji: b.emoji
-  })).filter(x => x.amount > 0);
+  })).filter(x => x.amount > 0).sort((a, b) => b.amount - a.amount);
   // הוצאות לא מתוקצבות — בפועל: רק מה שכבר יצא; בצפי: הכול
   const unbBudg = actualMode ? (calc.unbudgetedRealized || 0) : (calc.unbudgeted || 0);
   const unbItems = (calc.active || []).filter(e => !e.budgetId).filter(e => actualMode ? isReal(e) : true).map(e => ({
     name: e.name || "הוצאה",
     amount: +e.amount || 0,
-    emoji: e.emoji
-  })).filter(x => x.amount > 0.5);
+    emoji: e.emoji,
+    date: isISO(e.date) ? e.date : e.ym ? e.ym + "-15" : null
+  })).filter(x => x.amount > 0.5).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.amount - a.amount);
   // שונות תקציבים — בפועל (לפי ניצול ממשי)
   const surplusItems = flexDue.map(b => ({
     name: b.name || "תקציב",
     amount: (+b.target || 0) - (realByBud[b.id] || 0),
     emoji: b.emoji
-  })).filter(x => x.amount > 0.5);
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const overActualItems = flexDue.map(b => ({
     name: b.name || "תקציב",
     amount: (realByBud[b.id] || 0) - (+b.target || 0),
     emoji: b.emoji
-  })).filter(x => x.amount > 0.5);
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const surplusTot = surplusItems.reduce((s, x) => s + x.amount, 0);
   const overActualTot = overActualItems.reduce((s, x) => s + x.amount, 0);
   // חריגות — צפי (כולל עתידי)
@@ -2068,7 +2078,7 @@ function ForecastDetail({
     name: b.name || "תקציב",
     amount: (calc.usedByBudget[b.id] || 0) - (calc.effTargetByBudget && calc.effTargetByBudget[b.id] != null ? calc.effTargetByBudget[b.id] : +b.target || 0),
     emoji: b.emoji
-  })).filter(x => x.amount > 0.5);
+  })).filter(x => x.amount > 0.5).sort((a, b) => b.amount - a.amount);
   const sources = typeof incomeSourcesFor === "function" ? incomeSourcesFor(data, ym) : [];
   const incomeItems = sources.length > 1 ? sources.map(x => ({
     name: x.name || "הכנסה",
@@ -2078,7 +2088,7 @@ function ForecastDetail({
   const bottom = actualMode ? remainingNow : finalLeft;
   const projNeg = projected < -0.5;
   const finalPos = !projNeg && finalLeft > 0.5;
-  const heroLabel = actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
+  const heroLabel = monthEnded ? projNeg ? "החודש הסתיים במינוס" : finalPos ? "נותרו בסוף החודש" : "החודש הסתיים באיזון" : actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
   const SecHead = t => h("div", {
     className: "text-[11px] font-bold tracking-wide text-stone-400 mt-3.5 mb-1.5 px-1"
   }, t);
@@ -2141,8 +2151,12 @@ function ForecastDetail({
       key: i,
       className: "flex items-center justify-between py-0.5 text-[12px] text-stone-400"
     }, h("span", {
+      className: "min-w-0 flex flex-col"
+    }, h("span", {
       className: "truncate flex items-center gap-1"
-    }, x.emoji ? h("span", null, x.emoji) : null, h("span", null, x.name)), h("span", {
+    }, x.emoji ? h("span", null, x.emoji) : null, h("span", null, x.name)), x.date ? h("span", {
+      className: "text-[10px] text-stone-300 leading-tight"
+    }, fmtDate(x.date)) : null), h("span", {
       dir: "ltr",
       className: "tabular-nums shrink-0"
     }, shekel(x.amount)))))) : null);
@@ -2161,7 +2175,7 @@ function ForecastDetail({
       margin: "5px 0"
     }
   });
-  const varianceRows = actualMode ? [surplusTot > 0.5 ? Row({
+  const varianceRows = actualMode || monthEnded ? [surplusTot > 0.5 ? Row({
     label: "יתרה מתקציבים",
     amount: surplusTot,
     color: POS,
@@ -2183,7 +2197,40 @@ function ForecastDetail({
     items: overItems,
     k: "over"
   }) : null;
-  const summaryRows = actualMode ? [Row({
+  const summaryRows = monthEnded ? projNeg ? [Row({
+    label: "החודש הסתיים במינוס",
+    amount: projected,
+    color: NEG,
+    sign: "−",
+    strong: true,
+    k: "fin"
+  })] : [Row({
+    label: "יתרה לפני חיסכון",
+    amount: projected,
+    color: projected < 0 ? NEG : POS,
+    sign: projected < 0 ? "−" : "",
+    k: "bal"
+  }), effectiveSavings > 0.5 ? Row({
+    label: "נשמר לחיסכון",
+    amount: effectiveSavings,
+    color: MUT,
+    sign: "−",
+    icon: "🐷",
+    k: "goal"
+  }) : (+data.savingsGoal || 0) > 0 ? Row({
+    label: "לא נשאר לחיסכון",
+    amount: 0,
+    color: MUT,
+    icon: "🐷",
+    k: "goal"
+  }) : null, divider(), Row({
+    label: finalPos ? "נותר בסוף החודש" : "לא נותרה יתרה בסוף החודש",
+    amount: finalLeft,
+    color: finalLeft < 0 ? NEG : POS,
+    sign: finalLeft < 0 ? "−" : "",
+    strong: true,
+    k: "fin2"
+  })] : actualMode ? [Row({
     label: remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "חריגה כרגע" : "כרגע מאוזן",
     amount: remainingNow,
     color: remainingNow < 0 ? NEG : POS,
@@ -2218,20 +2265,20 @@ function ForecastDetail({
     strong: true,
     k: "fin2"
   })];
-  const infoText = actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
-  const infoShort = actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
+  const infoText = monthEnded ? "החודש הסתיים, ולכן המספרים הם נתוני אמת: ההכנסות מול ההוצאות שיצאו בפועל. תקציבי המעקב מחושבים לפי מה שבאמת יצא, ולא לפי היעד." : actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
+  const infoShort = monthEnded ? "נתוני אמת — כך הסתיים החודש בפועל." : actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
   return h(Sheet, {
-    title: "פירוט התחזית החודשית",
+    title: monthEnded ? "סיכום חודשי" : "פירוט התחזית החודשית",
     onClose: onClose
   }, h("div", {
     className: "flex justify-center mb-1"
   }, h("span", {
     className: "inline-flex items-center gap-1 rounded-full px-3.5 py-1 text-[11px] font-bold",
     style: {
-      background: actualMode ? "rgba(23,160,94,0.12)" : "rgba(47,111,237,0.12)",
-      color: actualMode ? POS : GREEN
+      background: monthEnded ? "rgba(122,134,158,0.12)" : actualMode ? "rgba(23,160,94,0.12)" : "rgba(47,111,237,0.12)",
+      color: monthEnded ? INK : actualMode ? POS : GREEN
     }
-  }, actualMode ? "📊 המצב בפועל" : "📈 צפי סוף חודש")), h("div", {
+  }, monthEnded ? "📊 סיכום חודשי" : actualMode ? "📊 המצב בפועל" : "📈 צפי סוף חודש")), h("div", {
     className: "text-center pt-0.5 pb-2"
   }, h("div", {
     className: "text-[12px] text-stone-500 mb-1"
@@ -2266,7 +2313,7 @@ function ForecastDetail({
     items: incomeItems,
     k: "inc"
   })), SecHead("הוצאות"), card(Row({
-    label: "תקציבי מעקב",
+    label: monthEnded ? "תקציבי מעקב (בפועל)" : "תקציבי מעקב",
     amount: targetsTotal,
     color: NEG,
     sign: "−",
@@ -2288,6 +2335,7 @@ function ForecastDetail({
 
 function MonthCard({
   calc,
+  ym,
   savingsGoal,
   mode,
   onMode,
@@ -2295,13 +2343,14 @@ function MonthCard({
   onEditGoal,
   onForecast
 }) {
-  const actual = mode === "actual";
+  const monthEnded = ym ? ymIndex(ym) < ymIndex(todayYM()) : false; // חודש שהסתיים → שפת סיכום
+  const actual = monthEnded ? false : mode === "actual"; // בחודש שהסתיים אין הפרדה בין "בפועל" ל"סיכום"
   const goalAmt = +savingsGoal || 0;
   const savedAmt = Math.min(goalAmt, Math.max(0, calc.projected)); // כמה באמת נשמר לחיסכון (חסום ליתרה הזמינה)
   const netAvail = calc.projected - savedAmt; // הכסף שבאמת נשאר פנוי לשימוש
   const over = actual ? calc.remainingNow < 0 : netAvail < 0;
   const mainVal = actual ? calc.remainingNow : netAvail;
-  const label = actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
+  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "נותרו בסוף החודש" : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
   const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה`;
   const rows = actual ? [{
     k: "הכנסה",
@@ -2318,7 +2367,7 @@ function MonthCard({
     c: GREEN,
     edit: true
   }, {
-    k: "תקציבים מתוכננים",
+    k: monthEnded ? "תקציבים (בפועל)" : "תקציבים מתוכננים",
     v: -calc.targetsTotal,
     c: INK
   }];
@@ -2336,7 +2385,13 @@ function MonthCard({
   return /*#__PURE__*/React.createElement("div", {
     className: "rounded-3xl p-4",
     style: glass()
-  }, /*#__PURE__*/React.createElement(Segmented, {
+  }, monthEnded ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-1.5 rounded-2xl h-9 text-[13px] font-bold",
+    style: {
+      background: "rgba(122,134,158,0.10)",
+      color: INK
+    }
+  }, "📊 סיכום חודשי") : /*#__PURE__*/React.createElement(Segmented, {
     value: mode,
     onChange: onMode,
     options: [{
@@ -2453,7 +2508,7 @@ function MonthCard({
       msg = "הגדירו יעד";
     } else if (room <= 0) {
       gt = S.red;
-      goalLabel = "לא נשאר לחיסכון";
+      goalLabel = monthEnded ? "לא נשאר לחיסכון" : "לא נשאר לחיסכון";
       amount = 0;
       msg = `מתוך ${shekel(intended)}`;
     } else if (effective < intended) {
@@ -4040,7 +4095,8 @@ function Section({
 /* ============================ מנווט חודשים ============================ */
 function MonthNav({
   ym,
-  onNav
+  onNav,
+  onPick
 }) {
   const {
     y,
@@ -4071,7 +4127,10 @@ function MonthNav({
     strokeLinejoin: "round"
   }, /*#__PURE__*/React.createElement("path", {
     d: "m9 6 6 6-6 6"
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement(MonthPicker, {
+    value: ym,
+    onChange: ymNew => onPick && onPick(ymNew)
+  }, /*#__PURE__*/React.createElement("div", {
     className: "text-center px-1 select-none",
     style: {
       minWidth: 70
@@ -4083,7 +4142,7 @@ function MonthNav({
     }
   }, HEB_MONTHS[m - 1]), /*#__PURE__*/React.createElement("div", {
     className: "text-[10px] text-stone-400 leading-none mt-1"
-  }, isNow ? "החודש" : y)), /*#__PURE__*/React.createElement("button", {
+  }, isNow ? "החודש" : y))), /*#__PURE__*/React.createElement("button", {
     onClick: () => onNav(1),
     className: arrow,
     style: {
@@ -5168,6 +5227,57 @@ function FreqPicker({
     onClick: () => pick(f)
   }, freqLabel(f))))));
 }
+/* תדירות תקציב — אותו רכיב Dropdown של הוצאה, עם 2 אפשרויות בלבד */
+function BudgetFreqPicker({
+  value,
+  onChange
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const anchorRef = useRef(null);
+  const openMenu = () => {
+    setClosing(false);
+    setOpen(true);
+  };
+  const close = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
+  const opts = [{
+    k: "every",
+    label: "כל חודש"
+  }, {
+    k: "once",
+    label: "רק החודש"
+  }];
+  const cur = value === "once" ? "once" : "every";
+  const pick = v => {
+    onChange(v);
+    close();
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MenuField, {
+    label: "תדירות",
+    value: (opts.find(o => o.k === cur) || opts[0]).label,
+    anchorRef: anchorRef,
+    open: open,
+    onOpen: openMenu
+  }), open && /*#__PURE__*/React.createElement(MenuShell, {
+    anchorRef: anchorRef,
+    closing: closing,
+    onClose: close
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      animation: "menuFwd .2s cubic-bezier(.32,.72,0,1)"
+    }
+  }, opts.map(o => /*#__PURE__*/React.createElement(MenuRow, {
+    key: o.k,
+    selected: cur === o.k,
+    onClick: () => pick(o.k)
+  }, o.label)))));
+}
 function InstallmentsPicker({
   value,
   onChange
@@ -5484,6 +5594,149 @@ function DatePicker({
     }, c.d));
   })))));
 }
+/* בורר חודשים — ממחזר את שפת ה-DatePicker (MenuShell, חצים, עיגול כחול) עם רשת 12 חודשים */
+function MonthPicker({
+  value,
+  onChange,
+  children
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [viewY, setViewY] = useState(ymParts(value || todayYM()).y);
+  const [dir, setDir] = useState(1);
+  const anchorRef = useRef(null);
+  const pad = n => String(n).padStart(2, "0");
+  const openMenu = () => {
+    setViewY(ymParts(value || todayYM()).y);
+    setClosing(false);
+    setOpen(true);
+  };
+  const close = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
+  const pick = ym => {
+    onChange(ym);
+    setTimeout(close, 120);
+  };
+  const changeYear = k => {
+    setDir(k > 0 ? 1 : -1);
+    setViewY(y => y + k);
+  };
+  const cur = todayYM();
+  const curParts = ymParts(cur);
+  const NavBtn = ({
+    onClick,
+    title,
+    d
+  }) => /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    title: title,
+    className: "grid place-items-center transition-transform active:scale-90",
+    style: {
+      width: 29,
+      height: 29,
+      borderRadius: 10,
+      background: "rgba(255,255,255,0.10)",
+      border: "1px solid rgba(255,255,255,0.15)"
+    }
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "#fff",
+    strokeWidth: "2.6",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: d === "r" ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"
+  })));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    ref: anchorRef,
+    onClick: openMenu,
+    className: "transition-transform active:scale-95",
+    style: {
+      background: "transparent",
+      border: "none",
+      padding: 0
+    }
+  }, children), open && /*#__PURE__*/React.createElement(MenuShell, {
+    anchorRef: anchorRef,
+    closing: closing,
+    onClose: close,
+    width: 286,
+    maxCap: 520
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "4px 6px 6px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2 px-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-[14px]",
+    style: {
+      color: "#fff"
+    }
+  }, viewY), /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-2"
+  }, viewY !== curParts.y && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setDir(1);
+      setViewY(curParts.y);
+      pick(cur);
+    },
+    className: "transition-transform active:scale-95",
+    style: {
+      color: "#5a9cf5",
+      fontSize: 12,
+      fontWeight: 700
+    }
+  }, "\u05d4\u05d7\u05d5\u05d3\u05e9 \u05d4\u05e0\u05d5\u05db\u05d7\u05d9"), /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => changeYear(-1),
+    title: "\u05e9\u05e0\u05d4 \u05e7\u05d5\u05d3\u05de\u05ea",
+    d: "r"
+  }), /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => changeYear(1),
+    title: "\u05e9\u05e0\u05d4 \u05d4\u05d1\u05d0\u05d4",
+    d: "l"
+  }))), /*#__PURE__*/React.createElement("div", {
+    key: viewY,
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(3,1fr)",
+      direction: "rtl",
+      gap: 4,
+      animation: `${dir > 0 ? "menuFwd" : "menuBack"} .22s cubic-bezier(.32,.72,0,1)`
+    }
+  }, HEB_MONTHS.map((mn, idx) => {
+    const cellYm = `${viewY}-${pad(idx + 1)}`;
+    const sel = cellYm === value;
+    const isCur = cellYm === cur;
+    return /*#__PURE__*/React.createElement("button", {
+      key: mn,
+      onClick: () => pick(cellYm),
+      className: "grid place-items-center transition-transform active:scale-90",
+      style: {
+        height: 40
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "grid place-items-center w-full",
+      style: {
+        height: 32,
+        borderRadius: 99,
+        background: sel ? greenGrad : "transparent",
+        color: "#fff",
+        fontSize: 12.5,
+        fontWeight: sel || isCur ? 700 : 500,
+        boxShadow: isCur && !sel ? "inset 0 0 0 1.5px rgba(90,150,245,0.7)" : "none"
+      }
+    }, mn));
+  })))));
+}
 function ExpenseForm({
   data,
   editing,
@@ -5534,7 +5787,7 @@ function ExpenseForm({
   const initBudget = editing?.budgetId ?? prefill?.budgetId ?? null;
   const initCat = editing?.catId ?? prefill?.catId ?? (initBudget && (budgets.find(b => b.id === initBudget) || {}).catId) ?? null;
   const [name, setName] = useState(editing?.name || prefill?.name || "");
-  const [amount, setAmount] = useState(recurEdit ? String(recurEff) : editing?.amount != null ? String(editing.amount) : prefill?.amount != null ? String(prefill.amount) : "");
+  const [amount, setAmount] = useState(recurEdit ? String(recurEff) : instEdit ? String(Math.round(instTotal * 100) / 100) : editing?.amount != null ? String(editing.amount) : prefill?.amount != null ? String(prefill.amount) : "");
   const [catId, setCatId] = useState(initCat);
   const [budgetId, setBudgetId] = useState(initBudget);
   const cat = cats.find(c => c.id === catId);
@@ -5576,9 +5829,9 @@ function ExpenseForm({
       year: "numeric"
     }).format(new Date(p.y, p.m - 1, 1));
   };
-  const catBudgets = catId ? budgets.filter(b => b.catId === catId && !b.fixed) : [];
   // זמינות תקציב לבחירה נקבעת לפי חודש ההוצאה (התאריך שנבחר), לא לפי החודש הנוכחי במערכת
   const expenseYm = isISO(date) ? date.slice(0, 7) : editing?.ym || ym || todayYM();
+  const catBudgets = catId ? budgets.filter(b => b.catId === catId && !b.fixed && !(b.onlyMonth && b.onlyMonth !== expenseYm)) : [];
   const origBudgetId = editing?.budgetId || null;
   const origYm = editing?.ym || (isISO(editing?.date) ? editing.date.slice(0, 7) : null);
   // אם התקציב שנבחר נעול בחודש ההוצאה — מסירים את השיוך. משמרים רק את השיוך המקורי בחודשו המקורי (grandfather).
@@ -5678,12 +5931,35 @@ function ExpenseForm({
         budgetId: budgetId || null,
         note
       };
-      const amountChanged = Math.round(+amount) !== Math.round(+editing.amount || 0);
+      // שינוי תאריך של תשלום בודד — חל רק עליו, לא על שאר הסדרה
+      const dateFor = isISO(date) && date !== editing.date ? {
+        id: editing.id,
+        date
+      } : null;
+      const total = +amount; // amount = סכום העסקה הכולל
+      const amountChanged = Math.round(total) !== Math.round(instTotal);
       const countChanged = instCount !== instEdit.n;
-      if (amountChanged || countChanged) {
+      const targetCount = countChanged ? instCount : instEdit.n;
+      if (amountChanged && instPaidCount >= 1) {
+        // כבר בוצעו תשלומים → לשאול: מהחודש והלאה (ברירת מחדל) או גם קודמים (רטרואקטיבי)
         setInstConfirm({
           meta,
-          newAmount: amountChanged ? +amount : null,
+          total,
+          targetCount,
+          dateFor,
+          newCount: countChanged ? instCount : null
+        });
+        return;
+      }
+      if (amountChanged || countChanged) {
+        // אין תשלומים שירדו (או רק שינוי מספר תשלומים) → חלוקה מחדש שווה של הסכום הכולל
+        const per = amountChanged ? total / Math.max(1, targetCount) : null;
+        onSaveInstallmentGroup({
+          gid: instEdit.id,
+          meta,
+          newAmount: per,
+          applyAll: true,
+          dateFor,
           newCount: countChanged ? instCount : null
         });
         return;
@@ -5692,6 +5968,7 @@ function ExpenseForm({
         gid: instEdit.id,
         meta,
         newAmount: null,
+        dateFor,
         newCount: null
       });
       return;
@@ -5702,14 +5979,19 @@ function ExpenseForm({
         setRecurAsk(true);
         return;
       }
-      // שינוי מטא-דאטה בהוצאה חוזרת — חל על כל החודשים; סכום הבסיס נשמר
+      // שינוי מטא-דאטה/תאריך בהוצאה חוזרת: אם התאריך שונה — מזיזים את העוגן (ym+date) כך שהמחזור נספר מחדש מהתאריך החדש
+      const baseRec = (data.expenses || []).find(x => x.id === editing.id) || editing;
+      const newDate = isISO(date) ? date : baseRec.date;
+      const newYm = isISO(date) ? date.slice(0, 7) : baseRec.ym;
       onSave({
-        ...editing,
+        ...baseRec,
         name: name.trim(),
         emoji,
         catId,
         budgetId: budgetId || null,
-        note
+        note,
+        date: newDate,
+        ym: newYm
       });
       return;
     }
@@ -5807,7 +6089,7 @@ function ExpenseForm({
     className: "mb-2.5"
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mb-1.5"
-  }, "סכום"), showQuick && quickAmts.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, instEdit ? "סכום העסקה" : "סכום"), showQuick && quickAmts.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "mb-2",
     style: {
       animation: "cardIn .34s cubic-bezier(.22,1,.36,1) both"
@@ -6222,37 +6504,69 @@ function ExpenseForm({
     style: {
       color: INK
     }
-  }, "עדכון עסקת תשלומים"), /*#__PURE__*/React.createElement("div", {
+  }, "עדכון סכום העסקה"), /*#__PURE__*/React.createElement("div", {
     className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
-  }, "שינית נתונים המשפיעים על כל עסקת התשלומים. התשלומים העתידיים יחושבו מחדש; תשלומים שכבר ירדו יישארו ללא שינוי."), /*#__PURE__*/React.createElement("div", {
+  }, "כבר בוצעו תשלומים בעסקה זו. כיצד להחיל את הסכום החדש?"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-2.5"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       const c = instConfirm;
       setInstConfirm(null);
+      const per = (c.total - instPaidAmount) / Math.max(1, c.targetCount - instPaidCount);
       onSaveInstallmentGroup({
-        gid: editing.installments.id,
+        gid: instEdit.id,
         meta: c.meta,
-        newAmount: c.newAmount,
+        newAmount: per,
+        applyAll: false,
+        dateFor: c.dateFor,
         newCount: c.newCount
       });
     },
-    className: "w-full rounded-2xl font-bold text-[15px] text-white transition-transform active:scale-[0.98]",
+    className: "w-full rounded-2xl px-4 py-3 text-white text-right transition-transform active:scale-[0.98]",
     style: {
-      height: 53,
-      background: greenGrad,
-      boxShadow: "0 8px 18px -8px rgba(47,90,210,0.55)"
+      background: greenGrad
     }
-  }, "עדכן את כל העסקה"), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "עדכן מהחודש והלאה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, "מחלק מחדש רק את התשלומים שנותרו. תשלומים שכבר בוצעו יישארו כפי שהם.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const c = instConfirm;
+      setInstConfirm(null);
+      const per = c.total / Math.max(1, c.targetCount);
+      onSaveInstallmentGroup({
+        gid: instEdit.id,
+        meta: c.meta,
+        newAmount: per,
+        applyAll: true,
+        dateFor: c.dateFor,
+        newCount: c.newCount
+      });
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-right transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "עדכן את כל העסקה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, "מחלק מחדש את כל התשלומים באופן שווה, כולל חודשים שכבר בוצעו.")), /*#__PURE__*/React.createElement("button", {
     onClick: () => setInstConfirm(null),
-    className: "w-full rounded-2xl font-semibold text-[15px] transition-transform active:scale-[0.98]",
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
     style: {
-      height: 53,
-      background: "#f1f2f6",
-      color: INK,
-      border: "1px solid rgba(122,134,158,0.14)"
+      background: "transparent",
+      color: GREEN
     }
-  }, "בטל")))), document.body), recurAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "ביטול")))), document.body), recurAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center px-6",
     onClick: () => setRecurAsk(false),
     style: {
@@ -6330,6 +6644,7 @@ function BudgetForm({
   const [catId, setCatId] = useState(editing?.catId || prefill?.catId || data.categories[0]?.id);
   const [note, setNote] = useState(editing?.note || "");
   const [noteOpen, setNoteOpen] = useState(!!editing?.note);
+  const [budgetFreq, setBudgetFreq] = useState(editing?.onlyMonth ? "once" : "every");
   const [expAmount, setExpAmount] = useState("");
   const cat = data.categories.find(c => c.id === catId);
   const pickCat = c => {
@@ -6350,6 +6665,12 @@ function BudgetForm({
     } : {}),
     ...(monthOverrides ? {
       targetByMonth: monthOverrides
+    } : {}),
+    ...(trueBudget && trueBudget.lockTimeline ? {
+      lockTimeline: trueBudget.lockTimeline
+    } : {}),
+    ...(!editing?.fixed && budgetFreq === "once" ? {
+      onlyMonth: editing?.onlyMonth || ym
     } : {})
   });
   const emitScoped = scope => {
@@ -6438,7 +6759,12 @@ function BudgetForm({
     }
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-[15px]"
-  }, c.emoji), /*#__PURE__*/React.createElement("span", null, c.name)))), noteOpen ? /*#__PURE__*/React.createElement("textarea", {
+  }, c.emoji), /*#__PURE__*/React.createElement("span", null, c.name)))), !editing?.fixed && /*#__PURE__*/React.createElement("div", {
+    className: "mb-3"
+  }, /*#__PURE__*/React.createElement(BudgetFreqPicker, {
+    value: budgetFreq,
+    onChange: setBudgetFreq
+  })), noteOpen ? /*#__PURE__*/React.createElement("textarea", {
     value: note,
     onChange: e => setNote(e.target.value),
     rows: 2,
@@ -7913,9 +8239,6 @@ function FilterSheet({
   }, {
     k: "az",
     label: "א-ת"
-  }, {
-    k: "za",
-    label: "ת-א"
   }];
   const sortOpts = singleCat ? expSortOpts : catSortOpts;
   const sortKey = singleCat ? filter.expSort || "new" : filter.catSort || "manual";
@@ -7960,7 +8283,9 @@ function FilterSheet({
     key: "e",
     className: "text-[15px]"
   }, c.emoji), c.name], c.id))), // ===== מיון/תצוגת הוצאות (בין קטגוריה למצב התקציב, רק כשנבחרה קטגוריה) =====
-  singleCat && h("div", {
+  h(Collapse, {
+    open: singleCat
+  }, h("div", {
     className: "rounded-2xl px-3.5 mb-4",
     style: field
   }, h(MenuField, {
@@ -7969,7 +8294,7 @@ function FilterSheet({
     anchorRef: sortRef,
     open: sortOpen,
     onOpen: openSort
-  })), singleCat && sortOpen && h(MenuShell, {
+  }))), singleCat && sortOpen && h(MenuShell, {
     anchorRef: sortRef,
     closing: sortClosing,
     onClose: closeSort
@@ -9635,6 +9960,13 @@ function App() {
     setPageDir(delta > 0 ? 1 : -1);
     setYm(y => shiftYM(y, delta));
   };
+  // בחירת חודש ישירה מבורר החודשים בכותרת
+  const goMonth = target => {
+    if (!target || target === ym) return;
+    setEnterBase(0);
+    setPageDir(ymIndex(target) > ymIndex(ym) ? 1 : -1);
+    setYm(target);
+  };
   const goTab = id => {
     if (id === tab) return;
     setPageDir(id === "cats" ? -1 : 1);
@@ -9818,7 +10150,9 @@ function App() {
     gid,
     meta,
     newAmount,
-    newCount
+    newCount,
+    applyAll,
+    dateFor
   }) => {
     const prev = data;
     const cur = todayYM(),
@@ -9838,8 +10172,13 @@ function App() {
           upd.budgetId = meta.budgetId != null ? meta.budgetId : null;
           if (meta.note != null) upd.note = meta.note;
         }
-        // שינוי סכום משפיע רק על תשלומים עתידיים — היסטוריה לא משתנה
-        if (newAmount != null && !isPaid(x)) upd.amount = newAmount;
+        // שינוי תאריך חל רק על התשלום שנערך — שאר התשלומים בסדרה לא נוגעים
+        if (dateFor && dateFor.id === x.id && isISO(dateFor.date)) {
+          upd.date = dateFor.date;
+          upd.ym = dateFor.date.slice(0, 7);
+        }
+        // שינוי סכום: כברירת מחדל רק תשלומים עתידיים; applyAll=true → גם תשלומים שכבר ירדו (עדכון רטרואקטיבי מפורש)
+        if (newAmount != null && (applyAll || !isPaid(x))) upd.amount = newAmount;
         return upd;
       });
       // הקטנת מספר התשלומים (רק להמשך) — מבטל תשלומים עתידיים שטרם ירדו בלבד; תשלומים ששולמו לא נמחקים ולא משתנים
@@ -10209,7 +10548,7 @@ function App() {
     showToast("המשתמש " + nm + " נמחק");
   };
   const catStats = c => {
-    const buds = (data.budgets || []).filter(b => b.catId === c.id);
+    const buds = (data.budgets || []).filter(b => b.catId === c.id && !(b.onlyMonth && b.onlyMonth !== ym));
     const unb = calc.active.filter(e => !e.budgetId && e.catId === c.id);
     const budTotal = buds.reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
     const total = budTotal + unb.reduce((s, e) => s + (+e.amount || 0), 0);
@@ -10229,7 +10568,7 @@ function App() {
     st: catStats(c)
   }));
   const catGrandTotal = catItems.reduce((s, x) => s + x.st.total, 0);
-  const filterActive = filter.cat != null || filter.type !== "all";
+  const filterActive = filter.cat != null || filter.type !== "all" || (filter.status || "all") !== "all";
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh"
@@ -10264,7 +10603,8 @@ function App() {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement(MonthNav, {
     ym: ym,
-    onNav: navMonth
+    onNav: navMonth,
+    onPick: goMonth
   }), /*#__PURE__*/React.createElement(InsightsButton, {
     count: unreadCount,
     onClick: openInsights
@@ -10284,6 +10624,7 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement(MonthCard, {
     calc: calc,
+    ym: ym,
     savingsGoal: data.savingsGoal,
     mode: mode,
     onMode: setMode,
@@ -10381,7 +10722,8 @@ function App() {
     style: {
       ...field,
       ...(filterActive ? {
-        background: "rgba(47,111,237,0.16)"
+        background: "#DBE6FA",
+        border: "1.5px solid " + GREEN
       } : {})
     }
   }, /*#__PURE__*/React.createElement("svg", {
