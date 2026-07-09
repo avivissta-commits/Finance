@@ -2037,6 +2037,8 @@ function ForecastDetail({
   calc,
   ym,
   mode,
+  viewBy = "budgets",
+  onViewBy,
   onClose,
   onIncome,
   onGoal
@@ -2332,6 +2334,105 @@ function ForecastDetail({
   })];
   const infoText = monthEnded ? "החודש הסתיים, ולכן המספרים הם נתוני אמת: ההכנסות מול ההוצאות שיצאו בפועל. תקציבי המעקב מחושבים לפי מה שבאמת יצא, ולא לפי היעד." : isFuture ? `זו תחזית מתוכננת ל${mName}, המבוססת על ההכנסות, התקציבים, ההוצאות החוזרות והתשלומים העתידיים הידועים כרגע.` : actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
   const infoShort = monthEnded ? "נתוני אמת — כך הסתיים החודש בפועל." : isFuture ? `תחזית מתוכננת ל${mName} לפי הנתונים הקיימים.` : actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
+  // ===== "תצוגה לפי" — תצוגה בלבד: לא מסתיר הוצאות ולא משנה אף חישוב =====
+  const viewOpts = [{
+    k: "budgets",
+    label: "תקציבים"
+  }, {
+    k: "type",
+    label: "\ud83d\udcb3 \u05e1\u05d5\u05d2 \u05d4\u05d5\u05e6\u05d0\u05d4"
+  }, {
+    k: "cat",
+    label: "\ud83d\udcc2 \u05e7\u05d8\u05d2\u05d5\u05e8\u05d9\u05d4"
+  }, {
+    k: "date_new",
+    label: "\ud83d\udcc5 \u05ea\u05d0\u05e8\u05d9\u05da \u00b7 \u05d7\u05d3\u05e9 \u2190 \u05d9\u05e9\u05df"
+  }, {
+    k: "date_old",
+    label: "\ud83d\udcc5 \u05ea\u05d0\u05e8\u05d9\u05da \u00b7 \u05d9\u05e9\u05df \u2190 \u05d7\u05d3\u05e9"
+  }, {
+    k: "amt_high",
+    label: "\ud83d\udcb0 \u05e1\u05db\u05d5\u05dd \u00b7 \u05d2\u05d1\u05d5\u05d4 \u2190 \u05e0\u05de\u05d5\u05da"
+  }, {
+    k: "amt_low",
+    label: "\ud83d\udcb0 \u05e1\u05db\u05d5\u05dd \u00b7 \u05e0\u05de\u05d5\u05da \u2190 \u05d2\u05d1\u05d5\u05d4"
+  }];
+  const vb = viewOpts.some(o => o.k === viewBy) ? viewBy : "budgets";
+  // רשימת ההוצאות המוצגת — אותו מקור נתונים של הכרטיס (בפועל / צפי)
+  const viewExps = (calc.active || []).filter(e => (+e.amount || 0) > 0).filter(e => actualMode ? isReal(e) : true);
+  const asItem = e => ({
+    name: e.name || "הוצאה",
+    amount: +e.amount || 0,
+    emoji: e.emoji,
+    date: isISO(e.date) ? e.date : e.ym ? e.ym + "-15" : null
+  });
+  const byDateDesc = (a, b) => (b.date || "").localeCompare(a.date || "") || b.amount - a.amount;
+  const byDateAsc = (a, b) => (a.date || "").localeCompare(b.date || "") || b.amount - a.amount;
+  const sum = arr => arr.reduce((t, x) => t + x.amount, 0);
+  const budById = {};
+  (calc.budgets || []).forEach(b => budById[b.id] = b);
+  const viewGroups = (() => {
+    if (vb === "type") {
+      const g = {
+        inst: [],
+        fixed: [],
+        reg: []
+      };
+      viewExps.forEach(e => {
+        const b = e.budgetId && budById[e.budgetId];
+        if (e.installments) g.inst.push(asItem(e));else if (e.recur && +e.recur.freq || b && b.fixed) g.fixed.push(asItem(e));else g.reg.push(asItem(e));
+      });
+      return [{
+        k: "vt-inst",
+        label: "\ud83d\udcb3 \u05e2\u05e1\u05e7\u05d0\u05d5\u05ea \u05d1\u05ea\u05e9\u05dc\u05d5\u05de\u05d9\u05dd",
+        items: g.inst.sort(byDateDesc)
+      }, {
+        k: "vt-fixed",
+        label: "\ud83c\udfe0 \u05d4\u05d5\u05e6\u05d0\u05d5\u05ea \u05e7\u05d1\u05d5\u05e2\u05d5\u05ea",
+        items: g.fixed.sort(byDateDesc)
+      }, {
+        k: "vt-reg",
+        label: "\ud83d\uded2 \u05d4\u05d5\u05e6\u05d0\u05d5\u05ea \u05e8\u05d2\u05d9\u05dc\u05d5\u05ea",
+        items: g.reg.sort(byDateDesc)
+      }].filter(x => x.items.length);
+    }
+    if (vb === "cat") {
+      const byCat = {};
+      viewExps.forEach(e => {
+        const id = e.catId || "_none";
+        (byCat[id] || (byCat[id] = [])).push(asItem(e));
+      });
+      return Object.keys(byCat).map(id => {
+        const c = (data.categories || []).find(x => x.id === id);
+        return {
+          k: "vc-" + id,
+          label: `${c ? c.emoji + " " + c.name : "ללא קטגוריה"}`,
+          items: byCat[id].sort(byDateDesc)
+        };
+      }).sort((a, b) => sum(b.items) - sum(a.items));
+    }
+    const flat = viewExps.map(asItem);
+    if (vb === "date_new") flat.sort(byDateDesc);else if (vb === "date_old") flat.sort(byDateAsc);else if (vb === "amt_high") flat.sort((a, b) => b.amount - a.amount);else if (vb === "amt_low") flat.sort((a, b) => a.amount - b.amount);
+    return flat.length ? [{
+      k: "vf-all",
+      label: `\ud83e\uddfe \u05db\u05dc \u05d4\u05d4\u05d5\u05e6\u05d0\u05d5\u05ea (${flat.length})`,
+      items: flat
+    }] : [];
+  })();
+  const viewRows = viewGroups.map((g, gi) => h("div", {
+    key: vb + "|" + g.k,
+    style: {
+      animation: "staggerUp .34s cubic-bezier(.22,.61,.36,1) both",
+      animationDelay: gi * 70 + "ms"
+    }
+  }, Row({
+    label: g.label,
+    amount: sum(g.items),
+    color: NEG,
+    sign: "−",
+    items: g.items,
+    k: g.k
+  })));
   // סה״כ הוצאות החודש = תקציבים + לא מתוקצבות (+ חריגות, רק בתחזית שבה הן מוצגות כשורה נוספת)
   const unbShownAmt = unbBudg > 0.5 ? unbBudg : 0;
   const overIncluded = !monthEnded && !actualMode && overspend > 0.5 ? overspend : 0;
@@ -2383,13 +2484,25 @@ function ForecastDetail({
     }
   }, "i")), info ? h("div", {
     className: "text-[11.5px] text-stone-400 leading-relaxed mt-2 px-3"
-  }, infoText) : null), SecHead("הכנסות"), card(Row({
+  }, infoText) : null), h("div", {
+    className: "flex items-center justify-end px-1 mt-1 mb-1"
+  }, h(SortDropdown, {
+    options: viewOpts,
+    value: vb,
+    onChange: k => onViewBy && onViewBy(k),
+    prefix: "\u05ea\u05e6\u05d5\u05d2\u05d4 \u05dc\u05e4\u05d9: "
+  })), SecHead("הכנסות"), card(Row({
     label: isFuture ? `הכנסות צפויות ב${mName}` : "הכנסות החודש",
     amount: income,
     color: POS,
     items: incomeItems,
     k: "inc"
-  })), SecHead("הוצאות"), card(Row({
+  })), SecHead("הוצאות"), card(h("div", {
+    key: "vb-" + vb,
+    style: {
+      animation: "cardIn .3s cubic-bezier(.22,1,.36,1) both"
+    }
+  }, vb === "budgets" ? [Row({
     label: monthEnded ? "תקציבי מעקב (בפועל)" : isFuture ? `תקציבי מעקב ב${mName}` : "תקציבי מעקב",
     amount: targetsTotal,
     color: NEG,
@@ -2403,7 +2516,9 @@ function ForecastDetail({
     sign: "−",
     items: unbItems,
     k: "unb"
-  }) : null, varianceRows, totalExpensesRow), SecHead("סיכום"), card(summaryRows), h("div", {
+  }) : null] : viewRows.length ? viewRows : h("div", {
+    className: "text-center text-stone-400 text-[12.5px] py-3"
+  }, "אין הוצאות להצגה")), varianceRows, totalExpensesRow), SecHead("סיכום"), card(summaryRows), h("div", {
     style: {
       height: 6
     }
@@ -10860,6 +10975,8 @@ function App() {
     expSort: "new"
   });
   const [mode, setMode] = useState("projected");
+  const [viewBy, setViewBy] = useState("budgets"); // "תצוגה לפי" בפירוט החודשי — נשמר בין פתיחות
+
   const [secCollapsed, setSecCollapsed] = useState({});
   const toggleSec = key => setSecCollapsed(c => ({
     ...c,
@@ -12618,6 +12735,8 @@ function App() {
     calc: calc,
     ym: ym,
     mode: mode,
+    viewBy: viewBy,
+    onViewBy: setViewBy,
     onClose: closeModal,
     onIncome: () => setModal({
       type: "income",
