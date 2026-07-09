@@ -509,6 +509,30 @@ const lockedAt = (tl, ym) => {
   return locked;
 };
 const isBudgetLocked = (b, ym) => !b || b.fixed ? false : lockedAt(b.lockTimeline, ym);
+/* מצב החודש המוצג: עבר / נוכחי / עתידי — מקור אמת יחיד לשפת הממשק */
+const monthStateOf = ym => {
+  if (!ym) return "current";
+  const d = ymIndex(ym) - ymIndex(todayYM());
+  return d < 0 ? "past" : d > 0 ? "future" : "current";
+};
+const monthNameOf = ym => {
+  try {
+    return HEB_MONTHS[ymParts(ym).m - 1];
+  } catch (e) {
+    return "החודש";
+  }
+};
+const monthLabelOf = ym => {
+  try {
+    const p = ymParts(ym);
+    return `${HEB_MONTHS[p.m - 1]} ${p.y}`;
+  } catch (e) {
+    return "";
+  }
+};
+/* "החודש" בחודש נוכחי/עבר, אבל "באוגוסט" בחודש עתידי */
+const inMonthPhrase = ym => monthStateOf(ym) === "future" ? `ב${monthNameOf(ym)}` : "החודש";
+const endOfMonthPhrase = ym => monthStateOf(ym) === "future" ? `בסוף ${monthNameOf(ym)}` : "בסוף החודש";
 const normalizeLockTimeline = tl => {
   const sorted = [...(tl || [])].filter(p => p && p.ym).sort((a, b) => a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : 0);
   const out = [];
@@ -2026,8 +2050,13 @@ function ForecastDetail({
   const POS = "#17a05e",
     NEG = "#b42318",
     MUT = "#8a8681";
-  const monthEnded = ymIndex(ym) < ymIndex(todayYM()); // חודש שהסתיים → שפת "סיכום", לא תחזית
-  const actualMode = monthEnded ? false : mode === "actual";
+  const mState = monthStateOf(ym); // past | current | future
+  const monthEnded = mState === "past";
+  const isFuture = mState === "future";
+  const mName = monthNameOf(ym);
+  const inM = isFuture ? `ב${mName}` : "החודש"; // "באוגוסט" / "החודש"
+  const endM = isFuture ? `בסוף ${mName}` : "בסוף החודש";
+  const actualMode = mState === "current" ? mode === "actual" : false;
   const income = calc.income || 0;
   const targetsTotal = calc.targetsTotal || 0;
   const overspend = calc.overspend || 0;
@@ -2091,7 +2120,7 @@ function ForecastDetail({
   const endTotalLeft = Math.max(0, projected); // סה״כ נשאר בסוף החודש (כולל מה שנשמר לחיסכון)
   const bottom = actualMode ? remainingNow : monthEnded ? endTotalLeft : finalLeft;
   const finalPos = !projNeg && finalLeft > 0.5;
-  const heroLabel = monthEnded ? projNeg ? "החודש הסתיים במינוס" : endTotalLeft > 0.5 ? "יתרה בסוף החודש" : "החודש הסתיים באיזון" : actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
+  const heroLabel = monthEnded ? projNeg ? "החודש הסתיים במינוס" : endTotalLeft > 0.5 ? "החודש הסתיים עם" : "החודש הסתיים באיזון" : isFuture ? projNeg ? `${mName} צפוי להסתיים במינוס` : finalPos ? `צפוי להישאר ${endM}` : `${mName} צפוי להסתיים באיזון` : actualMode ? remainingNow > 0.5 ? "נשאר לך כרגע" : remainingNow < -0.5 ? "כרגע במינוס" : "כרגע מאוזן" : projNeg ? "החודש צפוי להסתיים במינוס" : finalPos ? "נשאר לשימוש בסוף החודש" : "החודש צפוי להסתיים באיזון";
   const SecHead = t => h("div", {
     className: "text-[11px] font-bold tracking-wide text-stone-400 mt-3.5 mb-1.5 px-1"
   }, t);
@@ -2215,25 +2244,55 @@ function ForecastDetail({
     strong: true,
     k: "fin"
   })] : [goalSet > 0 ? Row({
-    label: "\u05d9\u05e2\u05d3 \u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    label: "\u05d9\u05e2\u05d3 \u05d4\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
     amount: goalSet,
     color: MUT,
     icon: "\ud83c\udfaf",
     k: "goal-target"
   }) : null, goalSet > 0 ? Row({
-    label: "\u05e0\u05e9\u05de\u05e8 \u05d1\u05e4\u05d5\u05e2\u05dc \u05dc\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    label: "\u05e0\u05e9\u05de\u05e8 \u05dc\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
     amount: savedActual,
     color: POS,
     icon: "\ud83d\udc37",
     k: "goal-saved"
   }) : null, goalSet > 0 ? Row({
-    label: "\u05d9\u05ea\u05e8\u05d4 \u05de\u05e2\u05d1\u05e8 \u05dc\u05d9\u05e2\u05d3",
+    label: "\u05d9\u05ea\u05e8\u05d4 \u05de\u05e2\u05d1\u05e8 \u05dc\u05d9\u05e2\u05d3 \u05d4\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
     amount: overGoal,
     color: POS,
     k: "goal-over"
   }) : null, divider(), Row({
-    label: "\u05e1\u05d4\u05f4\u05db \u05d9\u05ea\u05e8\u05d4 \u05d1\u05e1\u05d5\u05e3 \u05d4\u05d7\u05d5\u05d3\u05e9",
+    label: "\u05e1\u05d4\u05f4\u05db \u05d9\u05ea\u05e8\u05d4 \u05d1\u05e1\u05d9\u05d5\u05dd \u05d4\u05d7\u05d5\u05d3\u05e9",
     amount: totalLeft,
+    color: POS,
+    strong: true,
+    k: "fin2"
+  })] : isFuture ? projNeg ? [Row({
+    label: `${mName} \u05e6\u05e4\u05d5\u05d9 \u05dc\u05d4\u05e1\u05ea\u05d9\u05d9\u05dd \u05d1\u05de\u05d9\u05e0\u05d5\u05e1`,
+    amount: projected,
+    color: NEG,
+    sign: "\u2212",
+    strong: true,
+    k: "fin"
+  })] : [Row({
+    label: "\u05d9\u05ea\u05e8\u05d4 \u05e6\u05e4\u05d5\u05d9\u05d4 \u05dc\u05e4\u05e0\u05d9 \u05d9\u05e2\u05d3 \u05d4\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    amount: projected,
+    color: POS,
+    k: "bal"
+  }), goalSet > 0 ? Row({
+    label: "\u05d9\u05e2\u05d3 \u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    amount: goalSet,
+    color: MUT,
+    icon: "\ud83c\udfaf",
+    k: "goal-target"
+  }) : null, effectiveSavings > 0.5 ? Row({
+    label: "\u05e6\u05e4\u05d5\u05d9 \u05dc\u05d4\u05d9\u05e9\u05de\u05e8 \u05dc\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    amount: effectiveSavings,
+    color: POS,
+    icon: "\ud83d\udc37",
+    k: "goal"
+  }) : null, divider(), Row({
+    label: `\u05d9\u05ea\u05e8\u05d4 \u05e6\u05e4\u05d5\u05d9\u05d4 \u05dc\u05d0\u05d7\u05e8 \u05d9\u05e2\u05d3 \u05d4\u05d7\u05d9\u05e1\u05db\u05d5\u05df ${inM}`,
+    amount: finalLeft,
     color: POS,
     strong: true,
     k: "fin2"
@@ -2271,14 +2330,14 @@ function ForecastDetail({
     strong: true,
     k: "fin2"
   })];
-  const infoText = monthEnded ? "החודש הסתיים, ולכן המספרים הם נתוני אמת: ההכנסות מול ההוצאות שיצאו בפועל. תקציבי המעקב מחושבים לפי מה שבאמת יצא, ולא לפי היעד." : actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
-  const infoShort = monthEnded ? "נתוני אמת — כך הסתיים החודש בפועל." : actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
+  const infoText = monthEnded ? "החודש הסתיים, ולכן המספרים הם נתוני אמת: ההכנסות מול ההוצאות שיצאו בפועל. תקציבי המעקב מחושבים לפי מה שבאמת יצא, ולא לפי היעד." : isFuture ? `זו תחזית מתוכננת ל${mName}, המבוססת על ההכנסות, התקציבים, ההוצאות החוזרות והתשלומים העתידיים הידועים כרגע.` : actualMode ? "המספרים משקפים את מה שכבר קרה החודש — ההכנסות מול ההוצאות שכבר בוצעו בפועל." : "מהכנסות החודש מפחיתים את ההוצאות המתוכננות והחריגות — וכך מתקבלת היתרה הצפויה. ממנה מפחיתים את הסכום שנשמר לחיסכון, והתוצאה היא הכסף שנשאר פנוי לשימוש בסוף החודש.";
+  const infoShort = monthEnded ? "נתוני אמת — כך הסתיים החודש בפועל." : isFuture ? `תחזית מתוכננת ל${mName} לפי הנתונים הקיימים.` : actualMode ? "המספרים משקפים את המצב הנוכחי — הכנסות מול הוצאות שכבר בוצעו." : "התחזית מחושבת לפי ההכנסות, ההוצאות, התקציבים ויעד החיסכון.";
   // סה״כ הוצאות החודש = תקציבים + לא מתוקצבות (+ חריגות, רק בתחזית שבה הן מוצגות כשורה נוספת)
   const unbShownAmt = unbBudg > 0.5 ? unbBudg : 0;
   const overIncluded = !monthEnded && !actualMode && overspend > 0.5 ? overspend : 0;
   const totalExpenses = targetsTotal + unbShownAmt + overIncluded;
   const totalExpensesRow = [divider(), Row({
-    label: "סה״כ הוצאות החודש",
+    label: isFuture ? `סה״כ הוצאות צפויות ב${mName}` : "סה״כ הוצאות החודש",
     amount: totalExpenses,
     color: NEG,
     sign: "−",
@@ -2286,7 +2345,7 @@ function ForecastDetail({
     k: "totexp"
   })];
   return h(Sheet, {
-    title: monthEnded ? "סיכום חודשי" : "פירוט התחזית החודשית",
+    title: monthEnded ? `סיכום ${monthLabelOf(ym)}` : isFuture ? `תחזית ${monthLabelOf(ym)}` : "פירוט התחזית החודשית",
     onClose: onClose
   }, h("div", {
     className: "flex justify-center mb-1"
@@ -2296,7 +2355,7 @@ function ForecastDetail({
       background: monthEnded ? "rgba(122,134,158,0.12)" : actualMode ? "rgba(23,160,94,0.12)" : "rgba(47,111,237,0.12)",
       color: monthEnded ? INK : actualMode ? POS : GREEN
     }
-  }, monthEnded ? "📊 סיכום חודשי" : actualMode ? "📊 המצב בפועל" : "📈 צפי סוף חודש")), h("div", {
+  }, monthEnded ? "📊 סיכום חודשי" : isFuture ? "📈 צפי חודש" : actualMode ? "📊 המצב בפועל" : "📈 צפי סוף חודש")), h("div", {
     className: "text-center pt-0.5 pb-2"
   }, h("div", {
     className: "text-[12px] text-stone-500 mb-1"
@@ -2325,20 +2384,20 @@ function ForecastDetail({
   }, "i")), info ? h("div", {
     className: "text-[11.5px] text-stone-400 leading-relaxed mt-2 px-3"
   }, infoText) : null), SecHead("הכנסות"), card(Row({
-    label: "הכנסות החודש",
+    label: isFuture ? `הכנסות צפויות ב${mName}` : "הכנסות החודש",
     amount: income,
     color: POS,
     items: incomeItems,
     k: "inc"
   })), SecHead("הוצאות"), card(Row({
-    label: monthEnded ? "תקציבי מעקב (בפועל)" : "תקציבי מעקב",
+    label: monthEnded ? "תקציבי מעקב (בפועל)" : isFuture ? `תקציבי מעקב ב${mName}` : "תקציבי מעקב",
     amount: targetsTotal,
     color: NEG,
     sign: "−",
     items: budgetItems,
     k: "bud"
   }), unbBudg > 0.5 ? Row({
-    label: "הוצאות לא מתוקצבות",
+    label: isFuture ? `הוצאות לא מתוקצבות ב${mName}` : "הוצאות לא מתוקצבות",
     amount: unbBudg,
     color: NEG,
     sign: "−",
@@ -2361,15 +2420,17 @@ function MonthCard({
   onEditGoal,
   onForecast
 }) {
-  const monthEnded = ym ? ymIndex(ym) < ymIndex(todayYM()) : false; // חודש שהסתיים → שפת סיכום
-  const actual = monthEnded ? false : mode === "actual"; // בחודש שהסתיים אין הפרדה בין "בפועל" ל"סיכום"
+  const mState = monthStateOf(ym); // past | current | future
+  const monthEnded = mState === "past";
+  const isFuture = mState === "future";
+  const actual = mState === "current" ? mode === "actual" : false; // עבר/עתיד: אין לשונית "בפועל"
   const goalAmt = +savingsGoal || 0;
   const savedAmt = Math.min(goalAmt, Math.max(0, calc.projected)); // כמה באמת נשמר לחיסכון (חסום ליתרה הזמינה)
   const netAvail = calc.projected - savedAmt; // הכסף שבאמת נשאר פנוי לשימוש
   const endTotal = Math.max(0, calc.projected); // חודש שהסתיים: סה״כ נשאר (כולל מה שנשמר לחיסכון)
   const over = actual ? calc.remainingNow < 0 : monthEnded ? calc.projected < -0.5 : netAvail < 0;
   const mainVal = actual ? calc.remainingNow : monthEnded ? calc.projected < -0.5 ? calc.projected : endTotal : netAvail;
-  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "יתרה בסוף החודש" : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
+  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "החודש הסתיים עם" : isFuture ? over ? `חריגה צפויה בסוף ${monthNameOf(ym)}` : `צפוי להישאר בסוף ${monthNameOf(ym)}` : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
   const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה`;
   const rows = actual ? [{
     k: "הכנסה",
@@ -2386,7 +2447,7 @@ function MonthCard({
     c: GREEN,
     edit: true
   }, {
-    k: monthEnded ? "תקציבים (בפועל)" : "תקציבים מתוכננים",
+    k: monthEnded ? "תקציבים (בפועל)" : isFuture ? `תקציבי מעקב ב${monthNameOf(ym)}` : "תקציבים מתוכננים",
     v: -calc.targetsTotal,
     c: INK
   }];
@@ -2404,13 +2465,13 @@ function MonthCard({
   return /*#__PURE__*/React.createElement("div", {
     className: "rounded-3xl p-4",
     style: glass()
-  }, monthEnded ? /*#__PURE__*/React.createElement("div", {
+  }, mState !== "current" ? /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-center gap-1.5 rounded-2xl h-9 text-[13px] font-bold",
     style: {
       background: "rgba(122,134,158,0.10)",
       color: INK
     }
-  }, "📊 סיכום חודשי") : /*#__PURE__*/React.createElement(Segmented, {
+  }, monthEnded ? "📊 סיכום חודשי" : "📈 תחזית חודשית") : /*#__PURE__*/React.createElement(Segmented, {
     value: mode,
     onChange: onMode,
     options: [{
@@ -2514,6 +2575,11 @@ function MonthCard({
         c: "#78716c",
         bg: "rgba(122,134,158,0.10)",
         bc: "rgba(122,134,158,0.4)"
+      },
+      blue: {
+        c: GREEN,
+        bg: "rgba(47,111,237,0.10)",
+        bc: "rgba(47,111,237,0.45)"
       }
     };
     const intended = +savingsGoal || 0;
@@ -2525,21 +2591,27 @@ function MonthCard({
       goalLabel = "יעד חיסכון";
       amount = 0;
       msg = "הגדירו יעד";
+    } else if (isFuture) {
+      // חודש עתידי — לשון תכנון בלבד, אסור "הושג"
+      gt = S.blue;
+      goalLabel = effective >= intended - 0.5 ? "לפי התכנון יישמרו לחיסכון" : "יעד החיסכון המתוכנן";
+      amount = effective >= intended - 0.5 ? intended : intended;
+      msg = "מתוכנן";
     } else if (room <= 0) {
       gt = S.red;
-      goalLabel = monthEnded ? "לא נשאר לחיסכון" : "לא נשאר לחיסכון";
+      goalLabel = monthEnded ? "לא הושג" : "לא נשאר לחיסכון";
       amount = 0;
-      msg = `מתוך ${shekel(intended)}`;
+      msg = monthEnded ? `מתוך יעד של ${shekel(intended)}` : `מתוך ${shekel(intended)}`;
     } else if (effective < intended) {
       gt = S.amber;
-      goalLabel = "נשמר חלקית";
+      goalLabel = monthEnded ? "נשמר לחיסכון" : "נשמר חלקית";
       amount = effective;
-      msg = `מתוך ${shekel(intended)}`;
+      msg = monthEnded ? `מתוך יעד של ${shekel(intended)}` : `מתוך ${shekel(intended)}`;
     } else {
       gt = S.green;
-      goalLabel = "נשמר לחיסכון";
+      goalLabel = monthEnded ? "נשמר לחיסכון" : "נשמר לחיסכון";
       amount = intended;
-      msg = "הושג";
+      msg = monthEnded ? "הושג" : "הושג";
     }
     return /*#__PURE__*/React.createElement("button", {
       onClick: onEditGoal,
@@ -2861,7 +2933,57 @@ function buildInsights(data, calc, ym) {
   const ins = budgetInsights(calc, ym);
   const rep = monthReport(data, calc, ym);
   const trend = monthTrend(data, ym);
-  const monthEnded = ymIndex(ym) < ymIndex(todayYM());
+  const mState = monthStateOf(ym);
+  const monthEnded = mState === "past";
+  const mName = monthNameOf(ym);
+  // ===== חודש עתידי: תכנון ותחזית בלבד — אסור "הושג" / "נשאר" / "הסתיים" =====
+  if (mState === "future") {
+    if ((calc.projected || 0) > 0.5) out.push({
+      id: `fut-bal:${ym}`,
+      level: "blue",
+      icon: "📈",
+      title: `לפי הנתונים הקיימים, צפויה יתרה של ${shekel(calc.projected)} ב${mName}`,
+      desc: "התחזית מבוססת על ההכנסות, התקציבים והתשלומים הידועים.",
+      primary: {
+        label: "פירוט התחזית",
+        act: {
+          kind: "savings"
+        }
+      }
+    });else if ((calc.projected || 0) < -0.5) out.push({
+      id: `fut-neg:${ym}`,
+      level: "yellow",
+      icon: "⚠️",
+      title: `${mName} צפוי להסתיים במינוס של ${shekel(Math.abs(calc.projected))}`,
+      desc: "כדאי לבחון את התקציבים או ההוצאות הקבועות."
+    });
+    if (rep.goal > 0) out.push({
+      id: `fut-goal:${ym}`,
+      level: "blue",
+      icon: "🐷",
+      title: rep.goalMet ? "לפי התכנון, ניתן לעמוד ביעד החיסכון" : "יעד החיסכון אינו אפשרי לפי התכנון הנוכחי",
+      desc: `היעד המתוכנן הוא ${shekel(rep.goal)}.`
+    });
+    if (rep.flex.length > 0) {
+      const plan = rep.flex.reduce((s, b) => s + (+b.target || 0), 0);
+      out.push({
+        id: `fut-bud:${ym}`,
+        level: "blue",
+        icon: "🎯",
+        title: `תקציבי המעקב ב${mName} מסתכמים ב-${shekel(plan)}`,
+        desc: "זהו הסכום המתוכנן, לא הוצאה שבוצעה."
+      });
+    }
+    const instNext = (data.expenses || []).filter(e => e.installments && e.ym === ym);
+    if (instNext.length > 0) out.push({
+      id: `fut-inst:${ym}`,
+      level: "blue",
+      icon: "🧾",
+      title: `ב${mName} צפויות לרדת ${instNext.length} עסקאות בתשלומים`,
+      desc: `סה״כ ${shekel(instNext.reduce((s, e) => s + (+e.amount || 0), 0))}.`
+    });
+    return out;
+  }
   // ===== חודש שהסתיים: תובנות סיכום ייעודיות =====
   if (monthEnded) {
     if (rep.goal > 0 && rep.goalMet) out.push({
@@ -3525,6 +3647,81 @@ function RingsCarousel({
 
   // ---- כל הרינגים שהמערכת מציעה, לפי סדר חשיבות. נאגור רק את מה שיש בו מידע אמיתי ----
   const ringList = [];
+  // ===== חודש עתידי: רינגים של תכנון בלבד — אסור "בחריגה" / "בסיכון" =====
+  if (monthStateOf(ym) === "future") {
+    const mN = monthNameOf(ym);
+    const flexB = (calc.budgets || []).filter(b => !b.fixed);
+    const fixedB = (calc.budgets || []).filter(b => b.fixed);
+    const plannedFlex = flexB.reduce((s, b) => s + (+b.target || 0), 0);
+    const plannedFixed = fixedB.reduce((s, b) => s + (+b.target || 0), 0);
+    const goal = +data.savingsGoal || 0;
+    const projected = calc.projected || 0;
+    const income = calc.income || 0;
+    const instThis = (data.expenses || []).filter(e => e.installments && e.ym === ym);
+    const instSum = instThis.reduce((s, e) => s + (+e.amount || 0), 0);
+    if (projected > 0.5) ringList.push({
+      pct: income > 0 ? Math.min(100, projected / income * 100) : 0,
+      center: Math.round(income > 0 ? projected / income * 100 : 0) + "%",
+      color: GREEN,
+      label: "📈 יתרה צפויה",
+      value: `בסוף ${mN}`,
+      open: "sumSavings"
+    });else if (projected < -0.5) ringList.push({
+      pct: 100,
+      center: "!",
+      color: AMBER,
+      label: "⚠️ צפוי מינוס",
+      value: `בסוף ${mN}`,
+      open: "sumSavings"
+    });
+    if (goal > 0) ringList.push({
+      pct: Math.min(100, projected > 0 ? Math.min(goal, projected) / goal * 100 : 0),
+      center: shekel(goal).replace(" ₪", ""),
+      color: GREEN,
+      label: "🐷 יעד מתוכנן",
+      value: projected >= goal ? "אפשרי לפי התכנון" : "לא אפשרי לפי התכנון",
+      open: "sumSavings"
+    });
+    if (plannedFlex > 0) ringList.push({
+      pct: income > 0 ? Math.min(100, plannedFlex / income * 100) : 0,
+      center: Math.round(income > 0 ? plannedFlex / income * 100 : 0) + "%",
+      color: PURPLE,
+      label: "🎯 תקציבי מעקב",
+      value: `מתוכננים ב${mN}`,
+      open: "sumSplit"
+    });
+    if (plannedFixed > 0) ringList.push({
+      pct: income > 0 ? Math.min(100, plannedFixed / income * 100) : 0,
+      center: Math.round(income > 0 ? plannedFixed / income * 100 : 0) + "%",
+      color: INK,
+      label: "🧾 הוצאות קבועות",
+      value: `צפויות ב${mN}`,
+      open: "sumSplit"
+    });
+    if (instThis.length > 0) ringList.push({
+      pct: 100,
+      center: String(instThis.length),
+      color: GREEN,
+      label: "💳 עסקאות בתשלומים",
+      value: `צפויות · ${shekel(instSum)}`,
+      open: "sumTopExp"
+    });
+    if (!ringList.length) ringList.push({
+      pct: 0,
+      center: "—",
+      color: GREEN,
+      label: "📅 אין תכנון",
+      value: `לא הוגדרו נתונים ל${mN}`,
+      open: null
+    });
+    const futPages = [];
+    for (let i = 0; i < ringList.length; i += 3) futPages.push(ringList.slice(i, i + 3));
+    return /*#__PURE__*/React.createElement(Carousel, {
+      pages: futPages,
+      onRing: onRing,
+      activeRing: activeRing
+    });
+  }
   // ===== חודש שהסתיים: דוח ביצועים דינמי — רק רינגים שיש בהם ערך =====
   if (ymIndex(ym) < ymIndex(todayYM())) {
     const rep = monthReport(data, calc, ym);
@@ -3797,6 +3994,8 @@ function RingDetail({
     body = null,
     openBudget = null;
   const repD = monthReport(data, calc, ym);
+  const rdFuture = monthStateOf(ym) === "future";
+  const rdName = monthNameOf(ym);
   if (ring === "sumSurplus") {
     title = repD.over.length === 0 ? "כל התקציבים נשמרו" : "תקציבים שהשאירו יתרה";
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -3844,7 +4043,7 @@ function RingDetail({
       onTap: () => onOpenBudget && onOpenBudget(x.b)
     }))));
   } else if (ring === "sumSavings") {
-    title = "יעד החיסכון";
+    title = rdFuture ? `תחזית ${rdName}` : "יעד החיסכון";
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "text-center mb-4"
     }, /*#__PURE__*/React.createElement("div", {
@@ -3854,24 +4053,24 @@ function RingDetail({
       }
     }, shekel(repD.saved)), /*#__PURE__*/React.createElement("div", {
       className: "text-[12px] text-stone-400 mt-1"
-    }, repD.goalMet ? "נשמר לחיסכון — היעד הושג" : `מתוך יעד של ${shekel(repD.goal)}`)), /*#__PURE__*/React.createElement(Flow, {
+    }, rdFuture ? repD.goalMet ? "צפוי להישמר לחיסכון לפי התכנון" : `יעד מתוכנן של ${shekel(repD.goal)}` : repD.goalMet ? "נשמר לחיסכון — היעד הושג" : `מתוך יעד של ${shekel(repD.goal)}`)), /*#__PURE__*/React.createElement(Flow, {
       steps: [{
-        k: "יתרה לפני חיסכון",
+        k: rdFuture ? "יתרה צפויה לפני חיסכון" : "יתרה לפני חיסכון",
         v: calc.projected || 0,
         neg: (calc.projected || 0) < 0
       }, {
-        k: "נשמר לחיסכון",
+        k: rdFuture ? "צפוי להישמר לחיסכון" : "נשמר לחיסכון",
         v: repD.saved,
         sign: "−"
       }, {
-        k: "נותר בסוף החודש",
+        k: rdFuture ? `צפוי להישאר בסוף ${rdName}` : "נותר בסוף החודש",
         v: (calc.projected || 0) - repD.saved,
         strong: true,
         neg: (calc.projected || 0) - repD.saved < 0
       }]
     }));
   } else if (ring === "sumTopExp") {
-    title = "ההוצאות הגדולות החודש";
+    title = rdFuture ? `הוצאות מתוכננות ב${rdName}` : "ההוצאות הגדולות החודש";
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "text-center mb-4"
     }, /*#__PURE__*/React.createElement("div", {
@@ -3892,7 +4091,7 @@ function RingDetail({
       onTap: onEditExpense ? () => onEditExpense(e) : undefined
     }))));
   } else if (ring === "sumSplit") {
-    title = "התפלגות ההוצאות";
+    title = rdFuture ? `התפלגות ההוצאות המתוכננות ב${rdName}` : "התפלגות ההוצאות";
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "text-center mb-4"
     }, /*#__PURE__*/React.createElement("div", {
@@ -3902,7 +4101,7 @@ function RingDetail({
       }
     }, Math.round(repD.budgetedPct), "%"), /*#__PURE__*/React.createElement("div", {
       className: "text-[12px] text-stone-400 mt-1"
-    }, "מההוצאות היו מתוך תקציבים")), /*#__PURE__*/React.createElement("div", {
+    }, rdFuture ? "מההוצאות המתוכננות הן מתוך תקציבים" : "מההוצאות היו מתוך תקציבים")), /*#__PURE__*/React.createElement("div", {
       className: "space-y-1.5"
     }, /*#__PURE__*/React.createElement(Row, {
       emoji: "🎯",
@@ -5819,6 +6018,57 @@ function BudgetFreqPicker({
     onClick: () => pick(o.k)
   }, o.label)))));
 }
+/* מצב סכומים מהירים — אותו Dropdown של תדירות, 2 אפשרויות */
+function QuickModePicker({
+  value,
+  onChange
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const anchorRef = useRef(null);
+  const openMenu = () => {
+    setClosing(false);
+    setOpen(true);
+  };
+  const close = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
+  const opts = [{
+    k: "learn",
+    label: "🧠 למידת המערכת"
+  }, {
+    k: "custom",
+    label: "✏️ בחירה אישית"
+  }];
+  const cur = value === "custom" ? "custom" : "learn";
+  const pick = v => {
+    onChange(v);
+    close();
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MenuField, {
+    label: "מצב",
+    value: (opts.find(o => o.k === cur) || opts[0]).label,
+    anchorRef: anchorRef,
+    open: open,
+    onOpen: openMenu
+  }), open && /*#__PURE__*/React.createElement(MenuShell, {
+    anchorRef: anchorRef,
+    closing: closing,
+    onClose: close
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      animation: "menuFwd .2s cubic-bezier(.32,.72,0,1)"
+    }
+  }, opts.map(o => /*#__PURE__*/React.createElement(MenuRow, {
+    key: o.k,
+    selected: cur === o.k,
+    onClick: () => pick(o.k)
+  }, o.label)))));
+}
 function InstallmentsPicker({
   value,
   onChange
@@ -7165,7 +7415,6 @@ function BudgetForm({
   onSave,
   onClose,
   onDelete,
-  onAddExpense,
   onSetLock
 }) {
   const isEdit = !!editing;
@@ -7186,7 +7435,22 @@ function BudgetForm({
   const [note, setNote] = useState(editing?.note || "");
   const [noteOpen, setNoteOpen] = useState(!!editing?.note);
   const [budgetFreq, setBudgetFreq] = useState(editing?.onlyMonth ? "once" : "every");
-  const [expAmount, setExpAmount] = useState("");
+  // סכומים מהירים: מצב + שלושה סכומים אישיים (נשמרים גם כשחוזרים ל"למידת המערכת")
+  const [quickMode, setQuickMode] = useState(editing?.quickMode === "custom" ? "custom" : "learn");
+  const [quickVals, setQuickVals] = useState(() => {
+    if (Array.isArray(editing?.quickAmounts) && editing.quickAmounts.length === 3) return editing.quickAmounts.map(v => Math.round(+v || 0));
+    if (editing) {
+      try {
+        return suggestAmounts({
+          ...editing,
+          quickMode: "learn"
+        }, data.expenses || []);
+      } catch (e) {}
+    }
+    return [40, 120, 900];
+  });
+  const [quickEdit, setQuickEdit] = useState(null); // אינדקס ה-chip בעריכה inline
+  const [quickDraft, setQuickDraft] = useState("");
   const cat = data.categories.find(c => c.id === catId);
   const pickCat = c => {
     setCatId(c.id);
@@ -7212,6 +7476,11 @@ function BudgetForm({
     } : {}),
     ...(!editing?.fixed && budgetFreq === "once" ? {
       onlyMonth: editing?.onlyMonth || ym
+    } : {}),
+    // סכומים מהירים — הסכומים האישיים נשמרים תמיד, גם במצב "למידת המערכת" (רק לא בשימוש)
+    quickMode: quickMode === "custom" ? "custom" : "learn",
+    ...(Array.isArray(quickVals) && quickVals.length === 3 ? {
+      quickAmounts: quickVals.map(v => Math.max(1, Math.round(+v || 0)))
     } : {})
   });
   const emitScoped = scope => {
@@ -7327,21 +7596,69 @@ function BudgetForm({
       background: "rgba(122,134,158,0.18)",
       margin: "4px 2px 14px"
     }
-  }), !curLocked && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    className: "text-[12px] font-semibold text-stone-500 mb-1.5"
-  }, "הוספת הוצאה לתקציב"), /*#__PURE__*/React.createElement(AmountStepper, {
-    value: expAmount,
-    onChange: setExpAmount,
-    placeholder: "סכום",
-    size: "md"
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: () => onAddExpense(buildBudget(), +expAmount || 0),
-    className: "w-full mt-2 rounded-2xl h-11 font-bold transition-transform active:scale-[0.99]",
+  }), !editing.fixed && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] font-semibold text-stone-500 mb-1"
+  }, "\u26a1 \u05e1\u05db\u05d5\u05de\u05d9\u05dd \u05de\u05d4\u05d9\u05e8\u05d9\u05dd"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-stone-400 leading-relaxed mb-2"
+  }, "\u05d1\u05d7\u05e8 \u05db\u05d9\u05e6\u05d3 \u05d9\u05d5\u05e6\u05d2\u05d5 \u05d4\u05e1\u05db\u05d5\u05de\u05d9\u05dd \u05d4\u05de\u05d4\u05d9\u05e8\u05d9\u05dd \u05d1\u05e2\u05ea \u05d4\u05d5\u05e1\u05e4\u05ea \u05d4\u05d5\u05e6\u05d0\u05d4 \u05dc\u05ea\u05e7\u05e6\u05d9\u05d1."), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-3.5",
+    style: field
+  }, /*#__PURE__*/React.createElement(QuickModePicker, {
+    value: quickMode,
+    onChange: setQuickMode
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-stone-400 leading-relaxed mt-2"
+  }, quickMode === "custom" ? "\u05e7\u05d1\u05e2 \u05e9\u05dc\u05d5\u05e9\u05d4 \u05e1\u05db\u05d5\u05de\u05d9\u05dd \u05e7\u05d1\u05d5\u05e2\u05d9\u05dd \u05e9\u05d9\u05d5\u05e4\u05d9\u05e2\u05d5 \u05ea\u05de\u05d9\u05d3 \u05d1\u05d4\u05d5\u05e1\u05e4\u05d4 \u05de\u05d4\u05d9\u05e8\u05d4 \u05dc\u05ea\u05e7\u05e6\u05d9\u05d1." : "\u05d4\u05e1\u05db\u05d5\u05de\u05d9\u05dd \u05d4\u05de\u05d4\u05d9\u05e8\u05d9\u05dd \u05d9\u05ea\u05e2\u05d3\u05db\u05e0\u05d5 \u05d0\u05d5\u05d8\u05d5\u05de\u05d8\u05d9\u05ea \u05dc\u05e4\u05d9 \u05d4\u05e8\u05d2\u05dc\u05d9 \u05d4\u05d4\u05d5\u05e6\u05d0\u05d5\u05ea \u05e9\u05dc\u05da \u05e2\u05d1\u05d5\u05e8 \u05d4\u05ea\u05e7\u05e6\u05d9\u05d1 \u05d4\u05d6\u05d4."), /*#__PURE__*/React.createElement(Collapse, {
+    open: quickMode === "custom"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "pt-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-stone-400 mb-2"
+  }, "\u05e2\u05e8\u05d5\u05da \u05d0\u05ea \u05e9\u05dc\u05d5\u05e9\u05ea \u05d4\u05e1\u05db\u05d5\u05de\u05d9\u05dd \u05e9\u05d9\u05d5\u05e4\u05d9\u05e2\u05d5 \u05d1\u05d4\u05d5\u05e1\u05e4\u05d4 \u05de\u05d4\u05d9\u05e8\u05d4 \u05dc\u05ea\u05e7\u05e6\u05d9\u05d1."), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, quickVals.map((v, i) => {
+    const commit = () => {
+      const n = Math.max(1, Math.round(+quickDraft || 0));
+      if (n > 0) setQuickVals(arr => arr.map((x, j) => j === i ? n : x));
+      setQuickEdit(null);
+    };
+    return quickEdit === i ? /*#__PURE__*/React.createElement("input", {
+      key: i,
+      autoFocus: true,
+      type: "number",
+      inputMode: "numeric",
+      value: quickDraft,
+      onChange: e => setQuickDraft(e.target.value),
+      onBlur: commit,
+      onKeyDown: e => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setQuickEdit(null);
+      },
+      className: "flex-1 rounded-full h-10 text-center text-[14px] font-bold outline-none",
+      style: {
+        ...field,
+        color: GREEN,
+        border: "1.5px solid " + GREEN
+      }
+    }) : /*#__PURE__*/React.createElement("button", {
+      key: i,
+      onClick: () => {
+        setQuickDraft(String(v));
+        setQuickEdit(i);
+      },
+      className: "flex-1 rounded-full h-10 text-[14px] font-bold transition-transform active:scale-95",
+      style: {
+        background: "#DBE6FA",
+        color: GREEN
+      }
+    }, shekel(v));
+  })))), /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "#dbe6fb",
-      color: "#2f6fed"
+      height: 1,
+      background: "rgba(122,134,158,0.18)",
+      margin: "14px 2px 0"
     }
-  }, "הוסף הוצאה ←")), !editing.fixed && /*#__PURE__*/React.createElement("div", {
+  })), !editing.fixed && /*#__PURE__*/React.createElement("div", {
     className: curLocked ? "" : "mt-4"
   }, !curLocked && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -7504,25 +7821,44 @@ function BudgetForm({
    מסננים חריגים חד-פעמיים (רחוקים מהחציון) כדי שסכום טיפוסי לא יידחק החוצה,
    ואז לוקחים לפי שכיחות ואז עדכניות; אם חסר — משלימים בעיגולים סביב הסכום הטיפוסי. */
 function suggestAmounts(budget, expenses) {
+  // מצב "בחירה אישית" — הסכומים שהמשתמש קבע, ללא למידה
+  if (budget && budget.quickMode === "custom" && Array.isArray(budget.quickAmounts) && budget.quickAmounts.length === 3) {
+    return budget.quickAmounts.map(v => Math.max(1, Math.round(+v || 0)));
+  }
+  // ---- למידת המערכת: לפי ההיסטוריה של אותו תקציב בלבד ----
   const past = (expenses || []).filter(e => e.budgetId === budget.id && (+e.amount || 0) > 0);
-  const amounts = past.map(e => Math.round(+e.amount));
-  if (!amounts.length) {
+  if (!past.length) {
     const base = (+budget.target || 0) > 0 ? Math.max(10, Math.round(budget.target / 6)) : 100;
     return quickAmounts([base]);
   }
-  const sorted = [...amounts].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)] || sorted[0];
-  const filtered = amounts.length >= 3 ? amounts.filter(v => v >= median / 3 && v <= median * 3) : amounts;
-  const use = filtered.length ? filtered : amounts;
+  const key = e => isISO(e.date) ? e.date : (e.ym || "") + "-01";
+  const byRecent = past.slice().sort((a, b) => key(b).localeCompare(key(a)));
+  const last = Math.round(+byRecent[0].amount);
+  // דירוג לפי שכיחות (סכומים שחוזרים הרבה), ואז לפי עדכניות — בלי לסנן סכומים גדולים שחוזרים
   const freq = {},
-    idx = {};
-  use.forEach((v, i) => {
+    recent = {};
+  byRecent.forEach((e, i) => {
+    const v = Math.round(+e.amount);
     freq[v] = (freq[v] || 0) + 1;
-    if (idx[v] == null) idx[v] = i;
+    if (recent[v] == null) recent[v] = i;
   });
-  const distinct = Object.keys(freq).map(Number).sort((a, b) => freq[b] - freq[a] || idx[a] - idx[b]);
-  if (distinct.length >= 3) return distinct.slice(0, 3).sort((a, b) => a - b);
-  return quickAmounts(distinct);
+  const distinct = Object.keys(freq).map(Number).sort((a, b) => freq[b] - freq[a] || recent[a] - recent[b]);
+  const out = [last];
+  distinct.forEach(v => {
+    if (out.length < 3 && !out.includes(v)) out.push(v);
+  });
+  // עדיין חסר? סכום הגיוני בין הקיימים, ואם לא — ברירות מחדל עגולות
+  const roundNice = n => n >= 500 ? Math.round(n / 50) * 50 : n >= 100 ? Math.round(n / 10) * 10 : Math.max(5, Math.round(n / 5) * 5);
+  if (out.length === 2) {
+    const mid = roundNice((Math.min(...out) + Math.max(...out)) / 2);
+    if (!out.includes(mid) && mid > 0) out.push(mid);
+  }
+  if (out.length < 3) {
+    quickAmounts([out[0] || 100]).forEach(v => {
+      if (out.length < 3 && !out.includes(v)) out.push(v);
+    });
+  }
+  return out.slice(0, 3);
 }
 function QuickAdd({
   budget,
@@ -10522,11 +10858,31 @@ function App() {
     setPageDir(id === "cats" ? -1 : 1);
     setTab(id);
   };
+  // שחזור מיקום גלילה סביב "הוספה מהירה": שמירה בפתיחה, החזרה מדויקת אחרי הסגירה והרינדור מחדש
+  const scrollRestoreRef = useRef(null);
+  const openQuickAdd = budget => {
+    scrollRestoreRef.current = window.scrollY || window.pageYOffset || 0;
+    setModal({
+      type: "quick",
+      budget
+    });
+  };
   const closeModal = () => {
     setClosing(true);
     setTimeout(() => {
       setModal(null);
       setClosing(false);
+      const y = scrollRestoreRef.current;
+      if (y != null) {
+        scrollRestoreRef.current = null;
+        // שתי פריימים: אחרי שהרשימה נבנתה מחדש ואחרי שהפריסה התייצבה — בלי scrollIntoView/focus
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (Math.abs((window.scrollY || 0) - y) > 1) window.scrollTo({
+            top: y,
+            behavior: "instant"
+          });
+        }));
+      }
     }, 300);
   };
 
@@ -11562,10 +11918,7 @@ function App() {
             type: "budgetDetail",
             budget: b
           }),
-          onQuickAdd: () => setModal({
-            type: "quick",
-            budget: b
-          })
+          onQuickAdd: () => openQuickAdd(b)
         }));
         const expRow = (e, i, border) => /*#__PURE__*/React.createElement("div", {
           key: e.id,
@@ -11715,7 +12068,6 @@ function App() {
     onSave: saveBudget,
     onDelete: requestDeleteBudget,
     onClose: closeModal,
-    onAddExpense: addExpenseToBudget,
     onSetLock: setBudgetLock
   }), modal?.type === "budgetDelete" && /*#__PURE__*/React.createElement(BudgetDeleteDialog, {
     budget: modal.budget,
@@ -11906,7 +12258,7 @@ function App() {
       }
     }, shekel(m.over)))));
   })(), modal?.type === "quick" && /*#__PURE__*/React.createElement(QuickAdd, {
-    budget: modal.budget,
+    budget: (data.budgets || []).find(b => b.id === modal.budget.id) || modal.budget,
     ym: ym,
     expenses: data.expenses,
     vocab: vocab,
@@ -12138,10 +12490,7 @@ function App() {
       type: "budgetForm",
       editing: (data.budgets || []).find(b => b.id === modal.budget.id) || modal.budget
     }),
-    onQuickAdd: () => setModal({
-      type: "quick",
-      budget: modal.budget
-    }),
+    onQuickAdd: () => openQuickAdd(modal.budget),
     onUpdateBudget: updateBudget,
     onClose: closeModal
   }), modal?.type === "catDetail" && /*#__PURE__*/React.createElement(CategoryDetail, {
