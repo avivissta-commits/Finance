@@ -1664,7 +1664,7 @@ function applyIncome(d, ym, v, scope) {
 /* ============================ חישובים ============================ */
 function useCalc(data, ym) {
   return useMemo(() => {
-    const budgets = (data.budgets || []).filter(b => !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm))).map(b => {
+    const budgets = (data.budgets || []).filter(b => !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm)) && !(b.onlyMonth && b.onlyMonth !== ym)).map(b => {
       const mt = b.targetByMonth && b.targetByMonth[ym];
       return mt != null && mt !== "" ? {
         ...b,
@@ -4047,7 +4047,8 @@ function Section({
 /* ============================ מנווט חודשים ============================ */
 function MonthNav({
   ym,
-  onNav
+  onNav,
+  onPick
 }) {
   const {
     y,
@@ -4078,7 +4079,10 @@ function MonthNav({
     strokeLinejoin: "round"
   }, /*#__PURE__*/React.createElement("path", {
     d: "m9 6 6 6-6 6"
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement(MonthPicker, {
+    value: ym,
+    onChange: ymNew => onPick && onPick(ymNew)
+  }, /*#__PURE__*/React.createElement("div", {
     className: "text-center px-1 select-none",
     style: {
       minWidth: 70
@@ -4090,7 +4094,7 @@ function MonthNav({
     }
   }, HEB_MONTHS[m - 1]), /*#__PURE__*/React.createElement("div", {
     className: "text-[10px] text-stone-400 leading-none mt-1"
-  }, isNow ? "החודש" : y)), /*#__PURE__*/React.createElement("button", {
+  }, isNow ? "החודש" : y))), /*#__PURE__*/React.createElement("button", {
     onClick: () => onNav(1),
     className: arrow,
     style: {
@@ -5175,6 +5179,57 @@ function FreqPicker({
     onClick: () => pick(f)
   }, freqLabel(f))))));
 }
+/* תדירות תקציב — אותו רכיב Dropdown של הוצאה, עם 2 אפשרויות בלבד */
+function BudgetFreqPicker({
+  value,
+  onChange
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const anchorRef = useRef(null);
+  const openMenu = () => {
+    setClosing(false);
+    setOpen(true);
+  };
+  const close = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
+  const opts = [{
+    k: "every",
+    label: "כל חודש"
+  }, {
+    k: "once",
+    label: "רק החודש"
+  }];
+  const cur = value === "once" ? "once" : "every";
+  const pick = v => {
+    onChange(v);
+    close();
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MenuField, {
+    label: "תדירות",
+    value: (opts.find(o => o.k === cur) || opts[0]).label,
+    anchorRef: anchorRef,
+    open: open,
+    onOpen: openMenu
+  }), open && /*#__PURE__*/React.createElement(MenuShell, {
+    anchorRef: anchorRef,
+    closing: closing,
+    onClose: close
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      animation: "menuFwd .2s cubic-bezier(.32,.72,0,1)"
+    }
+  }, opts.map(o => /*#__PURE__*/React.createElement(MenuRow, {
+    key: o.k,
+    selected: cur === o.k,
+    onClick: () => pick(o.k)
+  }, o.label)))));
+}
 function InstallmentsPicker({
   value,
   onChange
@@ -5491,6 +5546,149 @@ function DatePicker({
     }, c.d));
   })))));
 }
+/* בורר חודשים — ממחזר את שפת ה-DatePicker (MenuShell, חצים, עיגול כחול) עם רשת 12 חודשים */
+function MonthPicker({
+  value,
+  onChange,
+  children
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [viewY, setViewY] = useState(ymParts(value || todayYM()).y);
+  const [dir, setDir] = useState(1);
+  const anchorRef = useRef(null);
+  const pad = n => String(n).padStart(2, "0");
+  const openMenu = () => {
+    setViewY(ymParts(value || todayYM()).y);
+    setClosing(false);
+    setOpen(true);
+  };
+  const close = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
+  const pick = ym => {
+    onChange(ym);
+    setTimeout(close, 120);
+  };
+  const changeYear = k => {
+    setDir(k > 0 ? 1 : -1);
+    setViewY(y => y + k);
+  };
+  const cur = todayYM();
+  const curParts = ymParts(cur);
+  const NavBtn = ({
+    onClick,
+    title,
+    d
+  }) => /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    title: title,
+    className: "grid place-items-center transition-transform active:scale-90",
+    style: {
+      width: 29,
+      height: 29,
+      borderRadius: 10,
+      background: "rgba(255,255,255,0.10)",
+      border: "1px solid rgba(255,255,255,0.15)"
+    }
+  }, /*#__PURE__*/React.createElement("svg", {
+    width: "15",
+    height: "15",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "#fff",
+    strokeWidth: "2.6",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: d === "r" ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"
+  })));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    ref: anchorRef,
+    onClick: openMenu,
+    className: "transition-transform active:scale-95",
+    style: {
+      background: "transparent",
+      border: "none",
+      padding: 0
+    }
+  }, children), open && /*#__PURE__*/React.createElement(MenuShell, {
+    anchorRef: anchorRef,
+    closing: closing,
+    onClose: close,
+    width: 286,
+    maxCap: 520
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "4px 6px 6px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2 px-0.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-[14px]",
+    style: {
+      color: "#fff"
+    }
+  }, viewY), /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-2"
+  }, viewY !== curParts.y && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setDir(1);
+      setViewY(curParts.y);
+      pick(cur);
+    },
+    className: "transition-transform active:scale-95",
+    style: {
+      color: "#5a9cf5",
+      fontSize: 12,
+      fontWeight: 700
+    }
+  }, "\u05d4\u05d7\u05d5\u05d3\u05e9 \u05d4\u05e0\u05d5\u05db\u05d7\u05d9"), /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => changeYear(-1),
+    title: "\u05e9\u05e0\u05d4 \u05e7\u05d5\u05d3\u05de\u05ea",
+    d: "r"
+  }), /*#__PURE__*/React.createElement(NavBtn, {
+    onClick: () => changeYear(1),
+    title: "\u05e9\u05e0\u05d4 \u05d4\u05d1\u05d0\u05d4",
+    d: "l"
+  }))), /*#__PURE__*/React.createElement("div", {
+    key: viewY,
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(3,1fr)",
+      direction: "rtl",
+      gap: 4,
+      animation: `${dir > 0 ? "menuFwd" : "menuBack"} .22s cubic-bezier(.32,.72,0,1)`
+    }
+  }, HEB_MONTHS.map((mn, idx) => {
+    const cellYm = `${viewY}-${pad(idx + 1)}`;
+    const sel = cellYm === value;
+    const isCur = cellYm === cur;
+    return /*#__PURE__*/React.createElement("button", {
+      key: mn,
+      onClick: () => pick(cellYm),
+      className: "grid place-items-center transition-transform active:scale-90",
+      style: {
+        height: 40
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "grid place-items-center w-full",
+      style: {
+        height: 32,
+        borderRadius: 99,
+        background: sel ? greenGrad : "transparent",
+        color: "#fff",
+        fontSize: 12.5,
+        fontWeight: sel || isCur ? 700 : 500,
+        boxShadow: isCur && !sel ? "inset 0 0 0 1.5px rgba(90,150,245,0.7)" : "none"
+      }
+    }, mn));
+  })))));
+}
 function ExpenseForm({
   data,
   editing,
@@ -5583,9 +5781,9 @@ function ExpenseForm({
       year: "numeric"
     }).format(new Date(p.y, p.m - 1, 1));
   };
-  const catBudgets = catId ? budgets.filter(b => b.catId === catId && !b.fixed) : [];
   // זמינות תקציב לבחירה נקבעת לפי חודש ההוצאה (התאריך שנבחר), לא לפי החודש הנוכחי במערכת
   const expenseYm = isISO(date) ? date.slice(0, 7) : editing?.ym || ym || todayYM();
+  const catBudgets = catId ? budgets.filter(b => b.catId === catId && !b.fixed && !(b.onlyMonth && b.onlyMonth !== expenseYm)) : [];
   const origBudgetId = editing?.budgetId || null;
   const origYm = editing?.ym || (isISO(editing?.date) ? editing.date.slice(0, 7) : null);
   // אם התקציב שנבחר נעול בחודש ההוצאה — מסירים את השיוך. משמרים רק את השיוך המקורי בחודשו המקורי (grandfather).
@@ -6388,6 +6586,7 @@ function BudgetForm({
   const [catId, setCatId] = useState(editing?.catId || prefill?.catId || data.categories[0]?.id);
   const [note, setNote] = useState(editing?.note || "");
   const [noteOpen, setNoteOpen] = useState(!!editing?.note);
+  const [budgetFreq, setBudgetFreq] = useState(editing?.onlyMonth ? "once" : "every");
   const [expAmount, setExpAmount] = useState("");
   const cat = data.categories.find(c => c.id === catId);
   const pickCat = c => {
@@ -6408,6 +6607,12 @@ function BudgetForm({
     } : {}),
     ...(monthOverrides ? {
       targetByMonth: monthOverrides
+    } : {}),
+    ...(trueBudget && trueBudget.lockTimeline ? {
+      lockTimeline: trueBudget.lockTimeline
+    } : {}),
+    ...(!editing?.fixed && budgetFreq === "once" ? {
+      onlyMonth: editing?.onlyMonth || ym
     } : {})
   });
   const emitScoped = scope => {
@@ -6496,7 +6701,12 @@ function BudgetForm({
     }
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-[15px]"
-  }, c.emoji), /*#__PURE__*/React.createElement("span", null, c.name)))), noteOpen ? /*#__PURE__*/React.createElement("textarea", {
+  }, c.emoji), /*#__PURE__*/React.createElement("span", null, c.name)))), !editing?.fixed && /*#__PURE__*/React.createElement("div", {
+    className: "mb-3"
+  }, /*#__PURE__*/React.createElement(BudgetFreqPicker, {
+    value: budgetFreq,
+    onChange: setBudgetFreq
+  })), noteOpen ? /*#__PURE__*/React.createElement("textarea", {
     value: note,
     onChange: e => setNote(e.target.value),
     rows: 2,
@@ -9692,6 +9902,13 @@ function App() {
     setPageDir(delta > 0 ? 1 : -1);
     setYm(y => shiftYM(y, delta));
   };
+  // בחירת חודש ישירה מבורר החודשים בכותרת
+  const goMonth = target => {
+    if (!target || target === ym) return;
+    setEnterBase(0);
+    setPageDir(ymIndex(target) > ymIndex(ym) ? 1 : -1);
+    setYm(target);
+  };
   const goTab = id => {
     if (id === tab) return;
     setPageDir(id === "cats" ? -1 : 1);
@@ -10267,7 +10484,7 @@ function App() {
     showToast("המשתמש " + nm + " נמחק");
   };
   const catStats = c => {
-    const buds = (data.budgets || []).filter(b => b.catId === c.id);
+    const buds = (data.budgets || []).filter(b => b.catId === c.id && !(b.onlyMonth && b.onlyMonth !== ym));
     const unb = calc.active.filter(e => !e.budgetId && e.catId === c.id);
     const budTotal = buds.reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
     const total = budTotal + unb.reduce((s, e) => s + (+e.amount || 0), 0);
@@ -10322,7 +10539,8 @@ function App() {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement(MonthNav, {
     ym: ym,
-    onNav: navMonth
+    onNav: navMonth,
+    onPick: goMonth
   }), /*#__PURE__*/React.createElement(InsightsButton, {
     count: unreadCount,
     onClick: openInsights
