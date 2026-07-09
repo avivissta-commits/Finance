@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- BUILD: 2026-07-09-v13 | month-states + installment-date-rules + quick-amounts | app-code only, no data-layer changes -->
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8" />
@@ -6529,11 +6528,10 @@ function MonthPicker({
       style: {
         height: 32,
         borderRadius: 99,
-        background: sel ? greenGrad : "transparent",
-        color: "#fff",
+        background: sel ? greenGrad : isCur ? "#DBE6FA" : "transparent",
+        color: sel ? "#fff" : isCur ? GREEN : "#fff",
         fontSize: 12.5,
-        fontWeight: sel || isCur ? 700 : 500,
-        boxShadow: isCur && !sel ? "inset 0 0 0 1.5px rgba(90,150,245,0.7)" : "none"
+        fontWeight: sel || isCur ? 700 : 500
       }
     }, mn));
   })))));
