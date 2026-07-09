@@ -2076,7 +2076,7 @@ function ForecastDetail({
     const b = e.budgetId && byId[e.budgetId];
     if (b && !b.fixed) realByBud[b.id] = (realByBud[b.id] || 0) + (+e.amount || 0);
   });
-  const flexDue = (calc.budgets || []).filter(b => !b.fixed && budgetDue(b, ym));
+  const flexDue = (calc.budgets || []).filter(b => !b.fixed && budgetDue(b, ym) && !(calc.lockedByBudget && calc.lockedByBudget[b.id]));
   // "תקציבי מעקב" — פירוט מציג את סכום התקציב בלבד (לא כמה נוצל)
   const budgetItems = (calc.budgets || []).filter(b => budgetDue(b, ym)).map(b => ({
     name: b.name || "תקציב",
@@ -2842,7 +2842,7 @@ const LEVEL_RANK = {
 };
 /* ניתוח חודש אחד — מקור אמת משותף לתובנות ולרינגים (נתוני אמת, ללא תחזית) */
 function monthReport(data, calc, ym) {
-  const flex = (calc.budgets || []).filter(b => !b.fixed);
+  const flex = (calc.budgets || []).filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id]));
   const usedOf = b => calc.usedByBudget[b.id] || 0;
   const surplus = flex.map(b => ({
     b,
@@ -6166,7 +6166,8 @@ function InstallmentsPicker({
 function DatePicker({
   value,
   onChange,
-  variant
+  variant,
+  lockMonth
 }) {
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -6190,11 +6191,14 @@ function DatePicker({
     }, 150);
   };
   const pick = iso => {
+    // חודש נעול: מותר לשנות רק את היום — לא לקפוץ לחודש אחר
+    if (lockMonth && isISO(iso) && iso.slice(0, 7) !== lockMonth) return;
     setJustPicked(iso);
     onChange(iso);
     setTimeout(close, 140);
   };
   const changeMonth = k => {
+    if (lockMonth) return; // ניווט בין חודשים חסום
     setDir(k > 0 ? 1 : -1);
     setViewYM(v => {
       const {
@@ -6233,15 +6237,20 @@ function DatePicker({
     title,
     d
   }) => /*#__PURE__*/React.createElement("button", {
-    onClick: onClick,
-    title: title,
+    onClick: lockMonth ? undefined : onClick,
+    disabled: !!lockMonth,
+    title: lockMonth ? "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e9\u05e0\u05d5\u05ea \u05d7\u05d5\u05d3\u05e9 \u05d1\u05ea\u05e9\u05dc\u05d5\u05dd \u05d6\u05d4" : title,
     className: "grid place-items-center transition-transform active:scale-90",
     style: {
       width: 29,
       height: 29,
       borderRadius: 10,
       background: "rgba(255,255,255,0.10)",
-      border: "1px solid rgba(255,255,255,0.15)"
+      border: "1px solid rgba(255,255,255,0.15)",
+      ...(lockMonth ? {
+        opacity: 0.25,
+        pointerEvents: "none"
+      } : {})
     }
   }, /*#__PURE__*/React.createElement("svg", {
     width: "15",
@@ -6540,6 +6549,7 @@ function ExpenseForm({
   onClose,
   onDelete,
   onDeleteInstallment,
+  onShiftInstallmentSeries,
   onCreateBudget
 }) {
   const isEdit = !!editing;
@@ -6561,6 +6571,14 @@ function ExpenseForm({
     return x.ym < cur ? true : x.ym > cur ? false : isISO(x.date) ? x.date.slice(0, 10) <= tIso : true;
   }).length : 0;
   const [instCount, setInstCount] = useState(instEdit ? instEdit.n : 1);
+  // כללי שינוי תאריך בעסקת תשלומים:
+  // תשלום ראשון שעדיין לא ירד → מותר לשנות חודש (עם שאלה על הזזת כל העסקה).
+  // כל תשלום אחר → היום בלבד; החודש נעול כדי לא לשבור את רצף העסקה.
+  const instIsFirst = !!instEdit && instEdit.i === 1;
+  const instNotStarted = instPaidCount === 0;
+  const instFreeDate = instIsFirst && instNotStarted;
+  const instLockMonth = instEdit && !instFreeDate ? editing.ym || (isISO(editing.date) ? editing.date.slice(0, 7) : null) : null;
+  const [dateAsk, setDateAsk] = useState(null); // {date} — שינוי חודש בתשלום הראשון
   const instMinCount = Math.max(1, instPaidCount);
   const recurEdit = isEdit && editing.recur && +editing.recur.freq ? editing : null;
   const recurEff = recurEdit ? (() => {
@@ -6727,6 +6745,14 @@ function ExpenseForm({
         id: editing.id,
         date
       } : null;
+      // תשלום ראשון שטרם ירד + שינוי חודש → לשאול אם להזיז את כל העסקה
+      const monthChanged = isISO(date) && date.slice(0, 7) !== (editing.ym || String(editing.date || "").slice(0, 7));
+      if (instFreeDate && monthChanged) {
+        setDateAsk({
+          date
+        });
+        return;
+      }
       const total = +amount; // amount = סכום העסקה הכולל
       const amountChanged = Math.round(total) !== Math.round(instTotal);
       const countChanged = instCount !== instEdit.n;
@@ -6868,7 +6894,8 @@ function ExpenseForm({
   }, /*#__PURE__*/React.createElement(DatePicker, {
     value: date,
     onChange: setDate,
-    variant: "inline"
+    variant: "inline",
+    lockMonth: instLockMonth
   })), /*#__PURE__*/React.createElement(NameEmojiRow, {
     name: name,
     setName: setName,
@@ -7203,7 +7230,103 @@ function ExpenseForm({
       background: greenGrad,
       boxShadow: "0 8px 18px -8px rgba(47,90,210,0.55)"
     }
-  }, "אישור")))), document.body), delAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "אישור")))), document.body), dateAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: () => setDateAsk(null),
+    style: {
+      zIndex: 130,
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2",
+    style: {
+      color: INK
+    }
+  }, "שינית את מועד תחילת העסקה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, "האם לעדכן רק את התשלום הראשון או להזיז גם את כל התשלומים העתידיים בהתאם?"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const d = dateAsk.date;
+      setDateAsk(null);
+      onSaveInstallmentGroup({
+        gid: instEdit.id,
+        meta: {
+          name: name.trim(),
+          emoji,
+          catId,
+          budgetId: budgetId || null,
+          note
+        },
+        newAmount: null,
+        newCount: null
+      });
+      onShiftInstallmentSeries(instEdit.id, d);
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-white text-right transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "הזז את כל העסקה (מומלץ)"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, "כל התשלומים העתידיים יוזזו בהתאם לתאריך החדש.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const d = dateAsk.date;
+      setDateAsk(null);
+      onSaveInstallmentGroup({
+        gid: instEdit.id,
+        meta: {
+          name: name.trim(),
+          emoji,
+          catId,
+          budgetId: budgetId || null,
+          note
+        },
+        newAmount: null,
+        dateFor: {
+          id: editing.id,
+          date: d
+        },
+        newCount: null
+      });
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-right transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "עדכן רק את התשלום הראשון"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, "רק התשלום הראשון ישתנה.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDateAsk(null),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")))), document.body), delAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center px-6",
     onClick: () => setDelAsk(false),
     style: {
@@ -7702,58 +7825,54 @@ function BudgetForm({
       background: greenGrad,
       opacity: !name.trim() || !target ? 0.5 : 1
     }
-  }, isEdit ? "שמור" : "הוסף")), scopeAsk && /*#__PURE__*/React.createElement("div", {
+  }, isEdit ? "שמור" : "הוסף")), scopeAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
     onClick: () => setScopeAsk(false),
     style: {
-      position: "fixed",
-      inset: 0,
       zIndex: 130,
-      background: "rgba(15,23,42,0.42)",
-      backdropFilter: "blur(2px)",
-      display: "flex",
-      alignItems: "flex-end",
-      justifyContent: "center",
-      padding: "0 16px 16px"
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
     }
   }, /*#__PURE__*/React.createElement("div", {
     onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
     style: {
-      width: "100%",
-      maxWidth: 412,
-      background: "#fff",
-      borderRadius: 24,
-      padding: "20px 18px 16px",
-      boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
-      animation: "sheetUp .22s cubic-bezier(.22,.61,.36,1) both"
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
     }
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-[16px] font-extrabold text-center",
+    className: "text-center font-bold text-[17px] mb-2",
     style: {
       color: INK
     }
-  }, "שינוי סכום התקציב"), /*#__PURE__*/React.createElement("div", {
-    className: "text-[13px] text-center text-stone-500 mt-1 mb-4 leading-snug"
-  }, "להחיל את הסכום החדש רק על החודש הזה, או מהחודש והלאה?"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => emitScoped("future"),
-    className: "w-full rounded-2xl h-12 font-bold text-white text-[15px] mb-2 transition-transform active:scale-[0.98]",
+  }, "\u05e9\u05d9\u05e0\u05d5\u05d9 \u05e1\u05db\u05d5\u05dd \u05d4\u05ea\u05e7\u05e6\u05d9\u05d1"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, "\u05dc\u05d4\u05d7\u05d9\u05dc \u05d0\u05ea \u05d4\u05e1\u05db\u05d5\u05dd \u05d4\u05d7\u05d3\u05e9 \u05e8\u05e7 \u05e2\u05dc \u05d4\u05d7\u05d5\u05d3\u05e9 \u05d4\u05d6\u05d4, \u05d0\u05d5 \u05de\u05d4\u05d7\u05d5\u05d3\u05e9 \u05d5\u05d4\u05dc\u05d0\u05d4?"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => emitScoped("month"),
+    className: "w-full rounded-2xl h-12 font-bold text-white text-[15px] transition-transform active:scale-[0.98]",
     style: {
       background: greenGrad
     }
-  }, "החל על החודש והלאה"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => emitScoped("month"),
-    className: "w-full rounded-2xl h-12 font-bold text-[15px] mb-2 transition-transform active:scale-[0.98]",
+  }, "\u05d4\u05d7\u05d5\u05d3\u05e9 \u05d1\u05dc\u05d1\u05d3"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => emitScoped("future"),
+    className: "w-full rounded-2xl h-12 font-bold text-[15px] transition-transform active:scale-[0.98]",
     style: {
       background: "#DBE6FA",
       color: GREEN
     }
-  }, "החל רק על החודש"), /*#__PURE__*/React.createElement("button", {
+  }, "\u05d4\u05d7\u05d5\u05d3\u05e9 \u05d5\u05d2\u05dd \u05d4\u05d7\u05d5\u05d3\u05e9\u05d9\u05dd \u05d4\u05d1\u05d0\u05d9\u05dd"), /*#__PURE__*/React.createElement("button", {
     onClick: () => setScopeAsk(false),
     className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
     style: {
       background: "transparent",
       color: GREEN
     }
-  }, "בטל"))), lockAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "\u05d1\u05d9\u05d8\u05d5\u05dc")))), document.body), lockAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center px-6",
     onClick: () => setLockAsk(false),
     style: {
@@ -11060,6 +11179,36 @@ function App() {
     const inst = list[0].installments;
     showToast(`${list[0].name} · ${inst.n} תשלומים על סך ${shekel(total)}`.replace(/\s+/g, " ").trim(), () => setData(prev));
   };
+  // הזזת עסקת תשלומים כולה: כל התשלומים זזים באותו מספר חודשים, ויום החיוב נלקח מהתאריך החדש
+  const shiftInstallmentSeries = (instId, newFirstDate) => {
+    const prev = data;
+    const group = (data.expenses || []).filter(x => x.installments && x.installments.id === instId);
+    if (!group.length || !isISO(newFirstDate)) {
+      closeModal();
+      return;
+    }
+    const first = group.slice().sort((a, b) => (a.installments.i || 0) - (b.installments.i || 0))[0];
+    const delta = ymIndex(newFirstDate.slice(0, 7)) - ymIndex(first.ym);
+    const day = +newFirstDate.slice(8, 10);
+    const name = first.name || "העסקה";
+    setData(d => ({
+      ...d,
+      expenses: d.expenses.map(x => {
+        if (!(x.installments && x.installments.id === instId)) return x;
+        const newYm = addMonths(x.ym + "-01", delta).slice(0, 7);
+        const p = ymParts(newYm);
+        const maxDay = new Date(p.y, p.m, 0).getDate(); // 31.01 → 28/29.02
+        const dd = String(Math.min(day, maxDay)).padStart(2, "0");
+        return {
+          ...x,
+          ym: newYm,
+          date: `${newYm}-${dd}`
+        };
+      })
+    }));
+    closeModal();
+    showToast(`${name} הוזזה`, () => setData(prev));
+  };
   const upsertInstallmentGroup = ({
     gid,
     meta,
@@ -12057,6 +12206,7 @@ function App() {
     onReplaceWithInstallments: replaceWithInstallments,
     onDelete: deleteExpense,
     onDeleteInstallment: deleteInstallment,
+    onShiftInstallmentSeries: shiftInstallmentSeries,
     onCreateBudget: createBudgetInline,
     onClose: closeModal
   }), modal?.type === "budgetForm" && /*#__PURE__*/React.createElement(BudgetForm, {
