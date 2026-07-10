@@ -462,6 +462,46 @@ function lastEmoji(str) {
   return null;
 }
 const HEB_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+/* ===== סינון: מקור אמת יחיד לברירות המחדל + נרמול הגנתי =====
+   כל מעבר משתמש חייב לעבור דרך כאן, אחרת שדות כמו status נשארים undefined
+   ואז אף אפשרות לא מסומנת ("מצב התקציב" ריק) והתצוגה נראית שבורה. */
+const FILTER_TYPES = ["all", "variable", "unbudgeted", "fixed", "installments"];
+const FILTER_STATUSES = ["all", "within", "near", "over"];
+const FILTER_CATSORTS = ["manual", "pct", "spend", "count", "alpha"];
+const FILTER_EXPSORTS = ["new", "old", "high", "low", "az", "za"];
+const DEFAULT_FILTER = {
+  cat: null,
+  type: "all",
+  query: "",
+  status: "all",
+  catSort: "manual",
+  expSort: "new"
+};
+const defaultFilter = () => ({
+  ...DEFAULT_FILTER
+});
+/* מחזיר תמיד אובייקט סינון תקין. cats = הקטגוריות של המשתמש הנוכחי. */
+const sanitizeFilter = (f, cats) => {
+  const base = defaultFilter();
+  if (!f || typeof f !== "object") return base;
+  const pick = (v, allowed, dflt) => allowed.indexOf(v) >= 0 ? v : dflt;
+  const catOk = f.cat != null && Array.isArray(cats) && cats.some(c => c.id === f.cat);
+  return {
+    cat: catOk ? f.cat : null,
+    // קטגוריה של משתמש אחר → "הכל"
+    type: pick(f.type, FILTER_TYPES, "all"),
+    query: typeof f.query === "string" ? f.query : "",
+    status: pick(f.status, FILTER_STATUSES, "all"),
+    catSort: pick(f.catSort, FILTER_CATSORTS, "manual"),
+    expSort: pick(f.expSort, FILTER_EXPSORTS, "new")
+  };
+};
+const isDefaultFilter = f => {
+  if (!f || typeof f !== "object") return true;
+  const type = FILTER_TYPES.indexOf(f.type) >= 0 ? f.type : "all";
+  const status = FILTER_STATUSES.indexOf(f.status) >= 0 ? f.status : "all";
+  return f.cat == null && type === "all" && status === "all";
+};
 const todayYM = () => {
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
@@ -2707,11 +2747,23 @@ function MonthCard({
       amount = 0;
       msg = "הגדירו יעד";
     } else if (isFuture) {
-      // חודש עתידי — לשון תכנון בלבד, אסור "הושג"
-      gt = S.blue;
-      goalLabel = effective >= intended - 0.5 ? "לפי התכנון יישמרו לחיסכון" : "יעד החיסכון המתוכנן";
-      amount = effective >= intended - 0.5 ? intended : intended;
-      msg = "מתוכנן";
+      // חודש עתידי — מציגים כמה באמת צפוי להישמר לפי התחזית, לא את היעד שהוגדר
+      if (room <= 0) {
+        gt = S.red;
+        goalLabel = "לא צפויה יתרה לחיסכון";
+        amount = 0;
+        msg = "אין חיסכון בחודש זה";
+      } else if (effective < intended - 0.5) {
+        gt = S.amber;
+        goalLabel = "צפוי להישמר לחיסכון";
+        amount = effective;
+        msg = `חסרים ${shekel(intended - effective)} ליעד`;
+      } else {
+        gt = S.blue;
+        goalLabel = "צפוי להישמר לחיסכון";
+        amount = effective;
+        msg = "צפוי לעמוד ביעד";
+      }
     } else if (room <= 0) {
       gt = S.red;
       goalLabel = monthEnded ? "לא הושג" : "לא נשאר לחיסכון";
@@ -6082,6 +6134,50 @@ function FreqPicker({
     onClick: () => pick(f)
   }, freqLabel(f))))));
 }
+/* תדירות הכנסה — אותו Dropdown, עם "חד פעמי" (0) בנוסף לתדירויות */
+function IncomeFreqPicker({
+  value,
+  onChange
+}) {
+  const [open, setOpen] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const anchorRef = useRef(null);
+  const openMenu = () => {
+    setClosing(false);
+    setOpen(true);
+  };
+  const close = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+    }, 150);
+  };
+  const pick = f => {
+    onChange(f);
+    close();
+  };
+  const lbl = v => +v === 0 ? "\u05d7\u05d3 \u05e4\u05e2\u05de\u05d9" : freqLabel(v);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(MenuField, {
+    label: "\u05ea\u05d3\u05d9\u05e8\u05d5\u05ea",
+    value: lbl(value),
+    anchorRef: anchorRef,
+    open: open,
+    onOpen: openMenu
+  }), open && /*#__PURE__*/React.createElement(MenuShell, {
+    anchorRef: anchorRef,
+    closing: closing,
+    onClose: close
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      animation: "menuFwd .2s cubic-bezier(.32,.72,0,1)"
+    }
+  }, [0, 1, 2, 3, 4, 6, 12].map(f => /*#__PURE__*/React.createElement(MenuRow, {
+    key: f,
+    selected: +value === f,
+    onClick: () => pick(f)
+  }, lbl(f))))));
+}
 /* תדירות תקציב — אותו רכיב Dropdown של הוצאה, עם 2 אפשרויות בלבד */
 function BudgetFreqPicker({
   value,
@@ -9086,7 +9182,7 @@ function IncomeSourceForm({
   // תאריך ברירת מחדל = החודש המוצג (לא "היום"), כדי שהכנסה שנוספת בחודש קודם תישמר לאותו חודש
   const defaultIncomeDate = ym && ym !== todayYM() ? ym + "-05" : todayISO();
   const [date, setDate] = useState(isISO(editing?.date) ? editing.date : defaultIncomeDate);
-  const [recur, setRecur] = useState(editing ? !!(editing.recur && +editing.recur.freq) : false);
+  const [recur, setRecur] = useState(editing ? !!(editing.recur && +editing.recur.freq) : true);
   const [freq, setFreq] = useState(editing && editing.recur && +editing.recur.freq || 1);
   const [note, setNote] = useState(editing?.note || "");
   const isEdit = !!editing;
@@ -9137,34 +9233,17 @@ function IncomeSourceForm({
     onChange: setDate
   }), /*#__PURE__*/React.createElement("div", {
     className: "mt-3"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setRecur(v => !v),
-    className: "w-full flex items-center justify-between rounded-2xl px-3.5 h-11",
-    style: field
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-right"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "block text-[14px] text-stone-600"
-  }, "הכנסה חוזרת"), /*#__PURE__*/React.createElement("span", {
-    className: "block text-[11px] text-stone-400"
-  }, recur ? freqLabel(freq) : "חד־פעמי — פעם אחת בלבד")), /*#__PURE__*/React.createElement("span", {
-    className: "w-11 h-6 rounded-full relative transition shrink-0",
-    style: {
-      background: recur ? GREEN : "rgba(122,134,158,0.35)"
+  }, /*#__PURE__*/React.createElement(IncomeFreqPicker, {
+    value: recur ? freq : 0,
+    onChange: f => {
+      if (+f === 0) {
+        setRecur(false);
+      } else {
+        setRecur(true);
+        setFreq(+f);
+      }
     }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all",
-    style: {
-      [recur ? "left" : "right"]: 2
-    }
-  }))), /*#__PURE__*/React.createElement(Collapse, {
-    open: recur
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "mt-1"
-  }, /*#__PURE__*/React.createElement(FreqPicker, {
-    value: freq,
-    onChange: setFreq
-  })))), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mb-1.5 mt-3"
   }, "הערה (אופציונלי)"), /*#__PURE__*/React.createElement("input", {
     value: note,
@@ -9392,7 +9471,7 @@ function FilterSheet({
     onClose: onClose
   },
   // ===== סינון =====
-  SecLabel("סינון"), FieldLabel("סוג"), h(ChipRow, null, types.map(t => chipBtn(filter.type === t.k, () => set({
+  SecLabel("סינון"), FieldLabel("סוג"), h(ChipRow, null, types.map(t => chipBtn((filter.type || "all") === t.k, () => set({
     type: t.k
   }), t.label, t.k))), FieldLabel("קטגוריה"), h(ChipRow, null, chipBtn(filter.cat == null, () => set({
     cat: null
@@ -9425,7 +9504,7 @@ function FilterSheet({
     key: o.k,
     selected: sortKey === o.k,
     onClick: () => pickSort(o.k)
-  }, o.label)))), FieldLabel("מצב התקציב"), h(ChipRow, null, statuses.map(st => chipBtn(filter.status === st.k, () => set({
+  }, o.label)))), FieldLabel("מצב התקציב"), h(ChipRow, null, statuses.map(st => chipBtn((filter.status || "all") === st.k, () => set({
     status: st.k
   }), st.label, st.k))), divider("0px"),
   // ===== כפתורים =====
@@ -10966,16 +11045,18 @@ function App() {
   const [ym, setYm] = useState(todayYM);
   const [pageDir, setPageDir] = useState(0);
   const [closing, setClosing] = useState(false);
-  const [filter, setFilter] = useState({
-    cat: null,
-    type: "all",
-    query: "",
-    status: "all",
-    catSort: "manual",
-    expSort: "new"
-  });
+  const [filter, setFilter] = useState(defaultFilter);
   const [mode, setMode] = useState("projected");
   const [viewBy, setViewBy] = useState("budgets"); // "תצוגה לפי" בפירוט החודשי — נשמר בין פתיחות
+  // ריפוי עצמי: אחרי שנטענו הנתונים של המשתמש, מנרמלים את הסינון שלו.
+  // רץ אחרי setData (סדר: נתונים → סינון → רינדור הקטגוריות), ולעולם לא משאיר שדה ריק.
+  useEffect(() => {
+    setFilter(f => {
+      const g = sanitizeFilter(f, data.categories);
+      const same = g.cat === f.cat && g.type === f.type && g.query === f.query && g.status === f.status && g.catSort === f.catSort && g.expSort === f.expSort;
+      return same ? f : g;
+    });
+  }, [data.categories]);
 
   const [secCollapsed, setSecCollapsed] = useState({});
   const toggleSec = key => setSecCollapsed(c => ({
@@ -11638,11 +11719,7 @@ function App() {
     setData(td);
     setYm(todayYM());
     setTab("home");
-    setFilter({
-      cat: null,
-      type: "all",
-      query: ""
-    });
+    setFilter(defaultFilter());
     closeModal();
     enterProfile();
     showToast("עברת אל " + ((users.find(u => u.id === id) || {}).name || "משתמש"));
@@ -11677,11 +11754,7 @@ function App() {
     setData(fresh);
     setYm(todayYM());
     setTab("home");
-    setFilter({
-      cat: null,
-      type: "all",
-      query: ""
-    });
+    setFilter(defaultFilter());
     closeModal();
     enterProfile();
     showToast("נוצר משתמש " + nm);
@@ -11716,11 +11789,7 @@ function App() {
       setData(loadUserData(next.id));
       setYm(todayYM());
       setTab("home");
-      setFilter({
-        cat: null,
-        type: "all",
-        query: ""
-      });
+      setFilter(defaultFilter());
       closeModal();
       enterProfile();
     }
@@ -11747,7 +11816,7 @@ function App() {
     st: catStats(c)
   }));
   const catGrandTotal = catItems.reduce((s, x) => s + x.st.total, 0);
-  const filterActive = filter.cat != null || filter.type !== "all" || (filter.status || "all") !== "all";
+  const filterActive = !isDefaultFilter(filter);
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh"
@@ -12695,14 +12764,7 @@ function App() {
       showToast("כל האזורים נסגרו");
     },
     onClear: () => {
-      setFilter({
-        cat: null,
-        type: "all",
-        query: "",
-        status: "all",
-        catSort: "manual",
-        expSort: "new"
-      });
+      setFilter(defaultFilter());
       setSecCollapsed({});
       closeModal();
       showToast("הסינון נוקה");
