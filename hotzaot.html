@@ -679,8 +679,7 @@ const todayLabel = () => {
     return new Intl.DateTimeFormat("he-IL", {
       weekday: "long",
       day: "numeric",
-      month: "long",
-      year: "numeric"
+      month: "long"
     }).format(new Date());
   } catch (e) {
     return todayISO();
@@ -1660,6 +1659,8 @@ function ymTitle(ym) {
 /* האם הוצאה מופיעה בחודש נתון (מודע לחזרתיות) — זהה ללוגיקה שבחישוב */
 function expAppearsIn(e, ym) {
   if (e && e.recur && +e.recur.freq) {
+    if (e.endYm && ymIndex(ym) >= ymIndex(e.endYm)) return false;
+    if (e.skipMonths && e.skipMonths.indexOf(ym) >= 0) return false;
     const di = ymIndex(ym) - ymIndex(e.ym);
     return di >= 0 && di % Math.max(1, +e.recur.freq) === 0;
   }
@@ -1686,8 +1687,297 @@ function usagePctText(used, target) {
   if (p >= 1000) return "999%+";
   return Math.round(p) + "%";
 }
+/* יעד חיסכון לפי חודש: override חודשי (savingsGoalByMonth) גובר על ברירת המחדל.
+   תוספתי לחלוטין — כשאין override מוחזר data.savingsGoal, כך שחודשים קיימים לא מושפעים. */
+function goalFor(data, ym) {
+  const map = data && data.savingsGoalByMonth;
+  if (map && ym && map[ym] != null && map[ym] !== "") return +map[ym] || 0;
+  return +(data && data.savingsGoal) || 0;
+}
+// מודל אחיד למרווח הביטחון ביתרה + מדד שבועי. שכבת המלצה בלבד — לא נוגע ב-calc.projected.
+// projected כבר מנכה הוצאות/תקציבים/תשלומים, ולכן אין ספירה כפולה.
+// חישוב רצפה שבועית אישית מהיסטוריה (P75 של הוצאות לא-מתוקצבות + חריגות תקציב לפי שבוע).
+// דורש לפחות 8 שבועות היסטוריה, אחרת מחזיר null (ואז נופלים ל-200 ברירת מחדל).
+// צורך שבועי אישי — דינמי. מחזיר minimum/preferred, לא מספר קסם קבוע.
+// עם היסטוריה: P75 אישי. בלי היסטוריה: fallback משולב לפי הכנסה (לא 200 קבוע).
+function historicalWeeklyNeed(data, ym, ctx) {
+  const income = (ctx && ctx.income) || 0;
+  // fallback משולב: צורך שבועי טיפוסי ≈ אחוז מההכנסה השבועית. לא מספר אחיד.
+  // הכנסה שבועית ≈ income / 4.33. רצפה שמרנית = ~30% ממנה, מוגבלת לתחום סביר.
+  const weeklyIncome = income > 0 ? income / 4.33 : 0;
+  const dynamicFallback = income > 0 ? Math.max(120, Math.min(600, Math.round(weeklyIncome * 0.30 / 10) * 10)) : 200;
+  try {
+    const expenses = (data && data.expenses) || [];
+    const cutoff = ym + "-01";
+    const past = expenses.filter(e => isISO(e.date) && e.date < cutoff && !e.budgetId && !e.installments && !(e.recur && +e.recur.freq));
+    if (past.length === 0) return {
+      floor: dynamicFallback,
+      hasHistory: false
+    };
+    const byWeek = {};
+    let minT = Infinity,
+      maxT = -Infinity;
+    for (const e of past) {
+      const t = new Date(e.date).getTime();
+      if (isNaN(t)) continue;
+      const wk = Math.floor(t / (7 * 864e5));
+      byWeek[wk] = (byWeek[wk] || 0) + (+e.amount || 0);
+      if (t < minT) minT = t;
+      if (t > maxT) maxT = t;
+    }
+    const weeks = Object.keys(byWeek).length;
+    const spanWeeks = isFinite(minT) ? Math.round((maxT - minT) / (7 * 864e5)) + 1 : 0;
+    if (weeks < 8 || spanWeeks < 8) return {
+      floor: dynamicFallback,
+      hasHistory: false
+    };
+    // P75 אישי מההיסטוריה
+    const vals = Object.values(byWeek).sort((x, y) => x - y);
+    const idx = Math.min(vals.length - 1, Math.floor(0.75 * (vals.length - 1)));
+    const p75 = vals[idx];
+    return {
+      floor: Math.max(100, Math.round(p75 / 10) * 10),
+      hasHistory: true
+    };
+  } catch (e) {
+    return {
+      floor: dynamicFallback,
+      hasHistory: false
+    };
+  }
+}
+
+// ===== הערכת חלוקה מחדש — ארבעה מצבים + אזור סובלנות =====
+// המערכת מחפשת ערך, לא שינוי. אם אין ערך אמיתי — מחזירה state "balanced" (אין הצעה).
+function redistributeAssessment(RM) {
+  const cur = RM.currentAvailable;
+  const minB = RM.minimumRecommendedBalance;
+  const prefB = RM.preferredRecommendedBalance;
+  const proposedDelta = Math.abs(RM.proposedSavings - RM.curGoal);
+  // אזור סובלנות: שינוי חייב לעבור את max(80, 10% מהשינוי המוצע)
+  const toleranceFloor = Math.max(80, RM.proposedSavings * 0.10);
+  const belowMinimum = cur < minB;
+  let state, hasProposal;
+  if (belowMinimum && RM.currentEffectiveSavings > 0) {
+    // 🔴 קריטי — היתרה נמוכה מהמינימום, יש חיסכון שאפשר להפחית
+    state = "critical";
+    hasProposal = true;
+  } else if (cur < minB) {
+    // היתרה נמוכה אך אין חיסכון להפחית — מצב מידע, לא הצעה
+    state = "critical_nofix";
+    hasProposal = false;
+  } else if (cur > prefB * 1.15 && RM.recommendationType === "increase" && proposedDelta >= toleranceFloor) {
+    // 🔵 אפשר לחסוך יותר — יתרה גבוהה משמעותית
+    state = "canSaveMore";
+    hasProposal = true;
+  } else if (RM.recommendationType === "reduce" && proposedDelta >= toleranceFloor) {
+    // 🟡 אפשר לשפר — הפחתת חיסכון תשפר נזילות
+    state = "improve";
+    hasProposal = true;
+  } else if (RM.recommendationType === "increase" && proposedDelta >= toleranceFloor && cur > prefB) {
+    // 🟡 אפשר לשפר — הגדלת חיסכון
+    state = "improve";
+    hasProposal = true;
+  } else {
+    // 🟢 מאוזן — אין צורך בשינוי
+    state = "balanced";
+    hasProposal = false;
+  }
+  return {
+    state,
+    hasProposal,
+    toleranceFloor: RM.round10(toleranceFloor),
+    proposedDelta: RM.round10(proposedDelta)
+  };
+}
+// ===== ניסוח מרכזי לשורת מהות השינוי — עקבי בכל המסכים =====
+// מחזיר {icon, text, tone} לפי סוג ההמלצה. tone: 'positive'|'neutral'|'warn'.
+function getRedistributionMessage(RM, A) {
+  const goal = RM.curGoal;
+  const proposed = RM.proposedSavings;
+  // אין הצעה — מאוזן / שינוי זניח
+  if (!A.hasProposal) {
+    return {
+      icon: "\u2713",
+      tone: "positive",
+      text: goal > 0 ? "החלוקה הנוכחית כבר מאוזנת — אין צורך לבצע שינוי." : "המצב הנוכחי מאוזן ביחס לזמן שנותר בחודש."
+    };
+  }
+  // קריטי — היתרה נמוכה מאוד
+  if (A.state === "critical" || A.state === "critical_balance") {
+    return {
+      icon: "\u26A0\uFE0F",
+      tone: "warn",
+      text: "היתרה הנוכחית נמוכה ביחס לזמן שנותר — הפחתת החיסכון תגדיל את הסכום הזמין לכל שבוע."
+    };
+  }
+  // הפחתה עד 0 — ביטול יעד לחודש זה
+  if (RM.recommendationType === "reduce" && proposed <= 0.5) {
+    return {
+      icon: "\uD83D\uDEE1\uFE0F",
+      tone: "neutral",
+      text: "החודש עדיף לוותר על יעד החיסכון ולהשאיר את מלוא היתרה זמינה."
+    };
+  }
+  // הפחתה חלקית
+  if (RM.recommendationType === "reduce") {
+    return {
+      icon: "\uD83D\uDD3D",
+      tone: "neutral",
+      text: "השינוי יפחית את יעד החיסכון כדי להשאיר יותר כסף זמין להמשך החודש."
+    };
+  }
+  // אין יעד קיים — יצירת יעד
+  if (goal <= 0 && RM.recommendationType === "increase") {
+    return {
+      icon: "\uD83D\uDCB0",
+      tone: "positive",
+      text: "ניתן להתחיל לחסוך החודש ועדיין להשאיר יתרה נוחה למרווח ביטחון."
+    };
+  }
+  // הגדלת יעד קיים
+  if (RM.recommendationType === "increase") {
+    return {
+      icon: "\uD83D\uDCC8",
+      tone: "positive",
+      text: "השינוי יגדיל את יעד החיסכון וישאיר יתרה מאוזנת לזמן שנותר בחודש."
+    };
+  }
+  return {
+    icon: "\u2696\uFE0F",
+    tone: "neutral",
+    text: "אפשר להתאים את החלוקה לזמן שנותר בחודש."
+  };
+}
+
+// ===== מודל נזילות דינמי — מקור אמת יחיד לכל המסכים =====
+function reserveModel(calc, ym, data) {
+  const round10 = n => Math.round(n / 10) * 10;
+  const income = (calc && calc.income) || 0;
+  const projected = Math.max(0, Math.round((calc && calc.projected) || 0));
+  const availableBeforeSavings = projected;
+  const st = monthStateOf(ym);
+  const p = ymParts(ym);
+  const daysInMonth = new Date(p.y, p.m, 0).getDate();
+  let remainingDays, remainingRatio;
+  if (st === "current") {
+    const currentDay = Math.min(new Date().getDate(), daysInMonth);
+    remainingDays = Math.max(1, daysInMonth - currentDay + 1);
+    remainingRatio = remainingDays / daysInMonth;
+  } else if (st === "future") {
+    remainingDays = daysInMonth;
+    remainingRatio = 1;
+  } else {
+    remainingDays = 0;
+    remainingRatio = 0;
+  }
+  const remainingWeeks = remainingDays / 7;
+  // רצפה שבועית אישית
+  const hw = historicalWeeklyNeed(data, ym, {
+    income
+  });
+  const userFloor = data && +data.weeklyFloor || 0;
+  const weeklyFloor = Math.max(userFloor, hw.floor);
+  // גבולות היתרה
+  const absoluteFloor = Math.max(100, income * 0.03);
+  const rw = st === "future" ? Math.max(remainingWeeks, daysInMonth / 7) : remainingWeeks;
+  const minimumRecommendedBalance = Math.min(availableBeforeSavings, round10(Math.max(weeklyFloor * rw, absoluteFloor)));
+  const preferredRecommendedBalance = Math.min(availableBeforeSavings, round10(Math.max(weeklyFloor * 1.20 * rw, absoluteFloor)));
+  // חיסכון בטוח
+  const maximumSafeSavings = Math.max(0, availableBeforeSavings - minimumRecommendedBalance);
+  const recommendedSavingsRaw = Math.max(0, availableBeforeSavings - preferredRecommendedBalance);
+  const curGoal = goalFor(data, ym);
+  // המלצה סימטרית
+  let proposedSavings, recommendationType;
+  if (availableBeforeSavings <= minimumRecommendedBalance) {
+    proposedSavings = 0;
+    recommendationType = "hold"; // אין מרווח בטוח
+  } else if (curGoal > maximumSafeSavings) {
+    proposedSavings = maximumSafeSavings;
+    recommendationType = "reduce";
+  } else if (curGoal < recommendedSavingsRaw) {
+    proposedSavings = recommendedSavingsRaw;
+    recommendationType = "increase";
+  } else {
+    proposedSavings = curGoal;
+    recommendationType = "keep";
+  }
+  // הגבלת שינוי אגרסיבי — שינוי הדרגתי
+  const maxSuggestedChange = Math.min(availableBeforeSavings * 0.25, income * 0.10);
+  if (recommendationType === "increase" || recommendationType === "reduce") {
+    const delta = proposedSavings - curGoal;
+    if (Math.abs(delta) > maxSuggestedChange) {
+      proposedSavings = round10(curGoal + Math.sign(delta) * maxSuggestedChange);
+    }
+  }
+  proposedSavings = Math.max(0, Math.min(availableBeforeSavings, round10(proposedSavings)));
+  // סף התראה דינמי
+  const currentDayNum = st === "current" ? Math.min(new Date().getDate(), daysInMonth) : st === "past" ? daysInMonth : 1;
+  const progress = Math.max(0, Math.min(1, (currentDayNum - 1) / Math.max(1, daysInMonth - 1)));
+  const baseThreshold = Math.max(80, income * 0.03, availableBeforeSavings * 0.10);
+  const alertThreshold = round10(baseThreshold * (1.3 - 0.6 * progress));
+  // CURRENT — לפי היעד הפעיל
+  const currentEffectiveSavings = Math.min(curGoal, Math.max(0, availableBeforeSavings));
+  const currentAvailable = Math.max(0, availableBeforeSavings - currentEffectiveSavings);
+  const currentPerWeek = remainingWeeks >= 1 ? round10(currentAvailable / remainingWeeks) : currentAvailable;
+  const currentPerDay = remainingDays >= 1 ? round10(currentAvailable / remainingDays) : currentAvailable;
+  // PROPOSED — לפי ההמלצה
+  const proposedAvailable = Math.max(0, availableBeforeSavings - proposedSavings);
+  const proposedPerWeek = remainingWeeks >= 1 ? round10(proposedAvailable / remainingWeeks) : proposedAvailable;
+  const proposedPerDay = remainingDays >= 1 ? round10(proposedAvailable / remainingDays) : proposedAvailable;
+  // שלושה מצבים
+  let liquidityState;
+  if (currentAvailable < minimumRecommendedBalance) liquidityState = "low";else if (currentAvailable <= preferredRecommendedBalance * 1.15) liquidityState = "balanced";else liquidityState = "high";
+  // ===== שמות תואמים לאחור (המסכים הקיימים) =====
+  const recommendedReserve = minimumRecommendedBalance; // "מומלץ להשאיר ביתרה"
+  const recommendedSavings = proposedSavings;
+  const safeSavingsCapacity = maximumSafeSavings;
+  const perWeek = proposedPerWeek;
+  const perDay = proposedPerDay;
+  const minimumReserve = round10(absoluteFloor);
+  return {
+    income,
+    projected,
+    availableBeforeSavings,
+    st,
+    daysInMonth,
+    remainingDays,
+    remainingRatio,
+    remainingWeeks,
+    weeklyFloor,
+    hasHistory: hw.hasHistory,
+    absoluteFloor: round10(absoluteFloor),
+    minimumRecommendedBalance,
+    preferredRecommendedBalance,
+    maximumSafeSavings,
+    recommendedSavingsRaw: round10(recommendedSavingsRaw),
+    proposedSavings,
+    recommendationType,
+    maxSuggestedChange: round10(maxSuggestedChange),
+    alertThreshold,
+    liquidityState,
+    curGoal,
+    currentEffectiveSavings,
+    currentAvailable,
+    currentPerWeek,
+    currentPerDay,
+    proposedAvailable,
+    proposedPerWeek,
+    proposedPerDay,
+    // תאימות לאחור
+    recommendedReserve,
+    recommendedSavings,
+    safeSavingsCapacity,
+    perWeek,
+    perDay,
+    minimumReserve,
+    round10
+  };
+}
+
 function incomeApplies(src, ym) {
   const sy = src.ym || (isISO(src.date) ? src.date.slice(0, 7) : todayYM());
+  if (src.skipMonths && src.skipMonths.indexOf(ym) >= 0) return false;
   if (src.endYm && ymIndex(ym) >= ymIndex(src.endYm)) return false;
   if (src.recur && +src.recur.freq) {
     const f = Math.max(1, +src.recur.freq);
@@ -1705,8 +1995,12 @@ function incomeApplies(src, ym) {
 function incomeSourcesFor(data, ym) {
   return (data.incomeSources || []).filter(s => incomeApplies(s, ym));
 }
+function incomeAmountFor(src, ym) {
+  if (src.monthEdits && src.monthEdits[ym] && src.monthEdits[ym].amount != null) return +src.monthEdits[ym].amount || 0;
+  return +src.amount || 0;
+}
 function incomeFor(data, ym) {
-  if (Array.isArray(data.incomeSources)) return data.incomeSources.reduce((s, src) => s + (incomeApplies(src, ym) ? +src.amount || 0 : 0), 0);
+  if (Array.isArray(data.incomeSources)) return data.incomeSources.reduce((s, src) => s + (incomeApplies(src, ym) ? incomeAmountFor(src, ym) : 0), 0);
   const map = data.incomeByMonth || {};
   const keys = Object.keys(map).filter(k => k <= ym).sort();
   if (keys.length) return +map[keys[keys.length - 1]] || 0;
@@ -1748,6 +2042,7 @@ function useCalc(data, ym) {
     const appearsIn = e => {
       if (e.recur && +e.recur.freq) {
         if (e.endYm && ymIndex(ym) >= ymIndex(e.endYm)) return false;
+        if (e.skipMonths && e.skipMonths.indexOf(ym) >= 0) return false;
         const di = ymIndex(ym) - ymIndex(e.ym);
         return di >= 0 && di % Math.max(1, +e.recur.freq) === 0;
       }
@@ -1755,6 +2050,8 @@ function useCalc(data, ym) {
     };
     // סכום אפקטיבי לחודש: שינוי סכום הוצאה חוזרת חל מהחודש שנקבע והלאה בלבד (עבר נשמר)
     const effAmount = e => {
+      // override חודשי (עריכת "רק החודש") גובר על הכול
+      if (e.monthEdits && e.monthEdits[ym] && e.monthEdits[ym].amount != null) return +e.monthEdits[ym].amount || 0;
       if (!e.amountHistory || !e.amountHistory.length) return +e.amount || 0;
       let amt = +e.amount || 0;
       [...e.amountHistory].sort((a, b) => ymIndex(a.fromYm) - ymIndex(b.fromYm)).forEach(hh => {
@@ -1762,19 +2059,56 @@ function useCalc(data, ym) {
       });
       return amt;
     };
+    // override חודשי לשדות מטא (שם/אייקון/קטגוריה/תקציב/הערה) — רק לחודש המוצג
+    const monthMeta = e => e.monthEdits && e.monthEdits[ym] ? e.monthEdits[ym] : null;
+    // תאריך אפקטיבי למופע של הוצאה חוזרת בחודש המוצג (day-of-month לפי dayHistory / override)
+    const effDate = e => {
+      if (e.monthEdits && e.monthEdits[ym] && isISO(e.monthEdits[ym].date)) return e.monthEdits[ym].date;
+      let day = +(String(isISO(e.date) ? e.date : (e.ym || ym) + "-01").slice(8, 10) || 1);
+      if (Array.isArray(e.dayHistory)) {
+        [...e.dayHistory].sort((a, b) => ymIndex(a.fromYm) - ymIndex(b.fromYm)).forEach(h => {
+          if (ymIndex(h.fromYm) <= ymIndex(ym)) day = +h.day;
+        });
+      }
+      const [yy, mm] = ym.split("-");
+      const lastDay = new Date(+yy, +mm, 0).getDate();
+      return `${yy}-${mm}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+    };
+    // שם אפקטיבי: nameHistory (איחוד מחודש מסוים והלאה) גובר על השם הבסיסי; override חודשי גובר על הכול
+    const effName = e => {
+      if (e.monthEdits && e.monthEdits[ym] && e.monthEdits[ym].name != null) return e.monthEdits[ym].name;
+      let nm = e.name;
+      if (Array.isArray(e.nameHistory)) {
+        [...e.nameHistory].sort((a, b) => ymIndex(a.fromYm) - ymIndex(b.fromYm)).forEach(h => {
+          if (ymIndex(h.fromYm) <= ymIndex(ym)) nm = h.name;
+        });
+      }
+      return nm;
+    };
     const active = allExp.filter(appearsIn).map(e => {
+      const mm = monthMeta(e);
+      const withMeta = {
+        ...e,
+        name: effName(e),
+        ...(mm ? {
+          emoji: mm.emoji != null ? mm.emoji : e.emoji,
+          catId: mm.catId != null ? mm.catId : e.catId,
+          budgetId: mm.budgetId !== undefined ? mm.budgetId : e.budgetId,
+          note: mm.note != null ? mm.note : e.note
+        } : {})
+      };
       if (e.recur && e.ym !== ym) {
-        const dt = addMonths(isISO(e.date) ? e.date : e.ym + "-01", ymIndex(ym) - ymIndex(e.ym));
         return {
-          ...e,
-          date: dt,
+          ...withMeta,
+          date: effDate(e),
           ym,
           amount: effAmount(e),
           _proj: true
         };
       }
       if (e.recur) return {
-        ...e,
+        ...withMeta,
+        date: effDate(e),
         amount: effAmount(e)
       };
       return e;
@@ -2104,7 +2438,7 @@ function ForecastDetail({
   const overspend = calc.overspend || 0;
   const projected = calc.projected || 0;
   const remainingNow = calc.remainingNow || 0;
-  const savingsGoal = +data.savingsGoal || 0;
+  const savingsGoal = goalFor(data, ym);
   const effectiveSavings = Math.min(savingsGoal, Math.max(0, projected));
   const finalLeft = projected - effectiveSavings;
   // ניצול בפועל (מודע לתאריך) לכל תקציב גמיש — עבור מצב "בפועל עכשיו"
@@ -2274,7 +2608,7 @@ function ForecastDetail({
   // ===== סיכום תוצאה לחודש שהסתיים =====
   // יתרת סוף החודש בפועל = projected. נשמר בפועל = min(יעד, max(0,יתרה)). מעבר ליעד = max(0, יתרה - יעד).
   const endBalance = projected;
-  const goalSet = +data.savingsGoal || 0;
+  const goalSet = goalFor(data, ym);
   const savedActual = Math.min(goalSet, Math.max(0, endBalance));
   const overGoal = Math.max(0, endBalance - goalSet);
   const totalLeft = savedActual + overGoal; // === max(0, endBalance)
@@ -2316,7 +2650,7 @@ function ForecastDetail({
     strong: true,
     k: "fin"
   })] : [Row({
-    label: "\u05d9\u05ea\u05e8\u05d4 \u05e6\u05e4\u05d5\u05d9\u05d4 \u05dc\u05e4\u05e0\u05d9 \u05d9\u05e2\u05d3 \u05d4\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    label: "\u05d9\u05ea\u05e8\u05d4 \u05dc\u05e4\u05e0\u05d9 \u05d9\u05e2\u05d3 \u05d4\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
     amount: projected,
     color: POS,
     k: "bal"
@@ -2327,7 +2661,7 @@ function ForecastDetail({
     icon: "\ud83c\udfaf",
     k: "goal-target"
   }) : null, effectiveSavings > 0.5 ? Row({
-    label: "\u05e6\u05e4\u05d5\u05d9 \u05dc\u05d4\u05d9\u05e9\u05de\u05e8 \u05dc\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
+    label: "\u05d9\u05d9\u05e9\u05de\u05e8 \u05dc\u05d7\u05d9\u05e1\u05db\u05d5\u05df",
     amount: effectiveSavings,
     color: POS,
     icon: "\ud83d\udc37",
@@ -2747,20 +3081,20 @@ function MonthCard({
       amount = 0;
       msg = "הגדירו יעד";
     } else if (isFuture) {
-      // חודש עתידי — מציגים כמה באמת צפוי להישמר לפי התחזית, לא את היעד שהוגדר
+      // חודש עתידי — פחות "צפוי": השורה אומרת "יישמר לחיסכון", ה"צפוי" נשאר לבאנר ולצ'יפ
       if (room <= 0) {
         gt = S.red;
-        goalLabel = "לא צפויה יתרה לחיסכון";
+        goalLabel = "לא תישאר יתרה לחיסכון";
         amount = 0;
-        msg = "אין חיסכון בחודש זה";
+        msg = "אין יתרה לחיסכון";
       } else if (effective < intended - 0.5) {
         gt = S.amber;
-        goalLabel = "צפוי להישמר לחיסכון";
+        goalLabel = "יישמר לחיסכון";
         amount = effective;
         msg = `חסרים ${shekel(intended - effective)} ליעד`;
       } else {
         gt = S.blue;
-        goalLabel = "צפוי להישמר לחיסכון";
+        goalLabel = "יישמר לחיסכון";
         amount = effective;
         msg = "צפוי לעמוד ביעד";
       }
@@ -3041,7 +3375,7 @@ function monthReport(data, calc, ym) {
   })).filter(x => x.cat).sort((a, b) => b.amount - a.amount);
   const topCat = catList[0] || null;
   // חיסכון
-  const goal = +data.savingsGoal || 0;
+  const goal = goalFor(data, ym);
   const saved = Math.min(goal, Math.max(0, calc.projected || 0));
   const goalMet = goal > 0 && saved >= goal - 0.5;
   // ממוצע יומי (לפי ימי החודש בפועל)
@@ -3094,6 +3428,201 @@ function monthTrend(data, ym, calcFor) {
   } catch (e) {
     return null;
   }
+}
+// ===== Timing Engine — מנגנון מרכזי שמחליט אילו תובנות להציג כהתראה =====
+// כל תובנה עוברת: (1) האם נכונה? [כבר סוננה ב-buildInsights] (2) האם עכשיו נכון להציג?
+// מסווג לפי id-prefix ל-basis/severity/topic, מחשב displayScore, מסנן לפי סף דינמי,
+// מאחד כפילויות לפי topic, ומחזיר עד 4 — הכל ממקור אחד.
+function classifyInsight(ins) {
+  const id = (ins.id || "").split(":")[0];
+  // מפה: prefix → {basis, severity, topic, amountKey}
+  const M = {
+    // ===== critical / fact-forecast =====
+    "overspend": {
+      basis: "forecast",
+      severity: "critical",
+      topic: "cashflow"
+    },
+    "over": {
+      basis: "fact",
+      severity: "critical",
+      topic: "budget"
+    },
+    "budget-crit": {
+      basis: "fact",
+      severity: "critical",
+      topic: "budget"
+    },
+    "inst-due": {
+      basis: "fact",
+      severity: "critical",
+      topic: "installments"
+    },
+    // ===== important =====
+    "reserve-low": {
+      basis: "forecast",
+      severity: "important",
+      topic: "reserve"
+    },
+    "weekly": {
+      basis: "forecast",
+      severity: "important",
+      topic: "reserve"
+    },
+    "fixed-high": {
+      basis: "forecast",
+      severity: "important",
+      topic: "spending"
+    },
+    "inst-load": {
+      basis: "forecast",
+      severity: "important",
+      topic: "installments"
+    },
+    "risk": {
+      basis: "forecast",
+      severity: "important",
+      topic: "budget"
+    },
+    "unbudgeted": {
+      basis: "fact",
+      severity: "important",
+      topic: "cleanup"
+    },
+    // ===== optimization =====
+    "liq-critical": {
+      basis: "forecast",
+      severity: "important",
+      topic: "reserve"
+    },
+    "liq-savemore": {
+      basis: "optimization",
+      severity: "important",
+      topic: "savings"
+    },
+    "liq-improve": {
+      basis: "optimization",
+      severity: "important",
+      topic: "reserve"
+    },
+    "save-more": {
+      basis: "optimization",
+      severity: "important",
+      topic: "savings"
+    },
+    "start-saving": {
+      basis: "optimization",
+      severity: "important",
+      topic: "savings"
+    },
+    "reserve-free": {
+      basis: "optimization",
+      severity: "important",
+      topic: "reserve"
+    },
+    // ===== behavioral =====
+    "mergeNames": {
+      basis: "behavioral",
+      severity: "info",
+      topic: "cleanup"
+    },
+    "cat-up": {
+      basis: "behavioral",
+      severity: "info",
+      topic: "spending"
+    },
+    // ===== info (לא במסך ההתראות כברירת מחדל) =====
+    "goal-met": {
+      basis: "fact",
+      severity: "info",
+      topic: "savings"
+    },
+    "sum-biggest": {
+      basis: "fact",
+      severity: "info",
+      topic: "spending"
+    },
+    "sum-topcat": {
+      basis: "fact",
+      severity: "info",
+      topic: "spending"
+    },
+    "sum-count": {
+      basis: "fact",
+      severity: "info",
+      topic: "spending"
+    }
+  };
+  const meta = M[id] || {
+    basis: "info",
+    severity: "info",
+    topic: "spending"
+  };
+  // סכום מעורב ב-id (החלק המספרי האחרון) לצורך סף משמעות
+  const parts = (ins.id || "").split(":");
+  let amount = 0;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const n = parseInt(parts[i], 10);
+    if (!isNaN(n)) {
+      amount = Math.abs(n);
+      break;
+    }
+  }
+  return {
+    ...meta,
+    amount
+  };
+}
+function gateInsights(list, calc, ym, data) {
+  const st = monthStateOf(ym);
+  const RM = reserveModel(calc, ym, data);
+  const income = RM.income || 0;
+  const daysInMonth = RM.daysInMonth;
+  const currentDay = Math.min(new Date().getDate(), daysInMonth);
+  const progress = st === "current" ? Math.max(0, Math.min(1, (currentDay - 1) / Math.max(1, daysInMonth - 1))) : st === "past" ? 1 : 0;
+  // סף משמעות דינמי משולב
+  const incomePctThreshold = 0.05 - 0.04 * progress;
+  const minimumAbsolute = Math.round((80 - 50 * progress) / 10) * 10;
+  const contextThreshold = RM.currentAvailable * 0.10;
+  const significanceThreshold = Math.max(income * incomePctThreshold, minimumAbsolute, contextThreshold);
+  const scored = [];
+  for (const ins of list) {
+    const c = classifyInsight(ins);
+    // (א) info לעולם לא נכנס למסך ההתראות
+    if (c.severity === "info") continue;
+    // (ב) optimization — כפוף לסף המשמעות הדינמי (אלא אם critical)
+    if (c.basis === "optimization" && c.severity !== "critical") {
+      if (c.amount < significanceThreshold) continue;
+    }
+    // (ג) confidence לפי basis
+    let confidence;
+    if (c.basis === "fact") confidence = 1;else if (c.basis === "forecast") confidence = 0.85;else if (c.basis === "optimization") confidence = 0.3 + 0.6 * progress;else confidence = 0.5;
+    // forecast/optimization חלשים בתחילת החודש — אבל critical עוקף
+    if (c.severity !== "critical" && c.basis === "optimization" && confidence < 0.5) continue;
+    // ציון תצוגה
+    const severityWeight = c.severity === "critical" ? 1000 : c.severity === "important" ? 100 : 10;
+    const confidenceWeight = confidence * 30;
+    const significanceWeight = Math.min(40, c.amount / Math.max(1, income) * 200);
+    const urgencyWeight = st === "current" ? progress * 20 : 0;
+    const displayScore = severityWeight + confidenceWeight + significanceWeight + urgencyWeight;
+    scored.push({
+      ins,
+      c,
+      displayScore
+    });
+  }
+  // מיון לפי ציון
+  scored.sort((a, b) => b.displayScore - a.displayScore);
+  // מניעת כפילויות: התראה אחת לכל topic (הגבוהה ביותר)
+  const seenTopic = new Set();
+  const deduped = [];
+  for (const item of scored) {
+    if (seenTopic.has(item.c.topic)) continue;
+    seenTopic.add(item.c.topic);
+    deduped.push(item);
+  }
+  // הגבלת עומס — עד 4
+  return deduped.slice(0, 4).map(x => x.ins);
 }
 function buildInsights(data, calc, ym) {
   const out = [];
@@ -3321,13 +3850,16 @@ function buildInsights(data, calc, ym) {
   });
   // חיסכון — חודש חי
   if (rep.goal > 0) {
-    if (rep.goalMet) out.push({
-      id: `goal-met:${ym}`,
-      level: "green",
-      icon: "🐷",
-      title: "יעד החיסכון הושג",
-      desc: `${shekel(rep.saved)} מיועדים לחיסכון החודש.`
-    });else if ((calc.projected || 0) > 0) out.push({
+    if (rep.goalMet) {
+      const afterGoal = Math.max(0, (calc.projected || 0) - rep.goal);
+      out.push({
+        id: `goal-met:${ym}:${Math.round(afterGoal / 100) * 100}`,
+        level: "green",
+        icon: "🐷",
+        title: "יעד החיסכון הושג",
+        desc: afterGoal > 0.5 ? `לאחר עמידה ביעד יישארו כ-${shekel(Math.round(afterGoal / 10) * 10)} ביתרה.` : "היעד יושג, אך לא יישאר סכום זמין ביתרה להוצאות בלתי צפויות."
+      });
+    } else if ((calc.projected || 0) > 0) out.push({
       id: `goal-gap:${ym}:${Math.round(rep.goal - rep.saved)}`,
       level: "yellow",
       icon: "🎯",
@@ -3377,30 +3909,188 @@ function buildInsights(data, calc, ym) {
   }));
   const ubList = calc.active.filter(e => !e.budgetId);
   const overCount = calc.budgets.filter(b => !b.fixed && (calc.usedByBudget[b.id] || 0) > (+b.target || 0)).length;
-  if (ubList.length > 0) out.push({
-    id: `unbudgeted:${ym}:${ubList.length}`,
-    level: "red",
-    icon: "🧾",
-    title: `יש ${ubList.length} ${ubList.length === 1 ? "הוצאה" : "הוצאות"} ללא תקציב`,
-    desc: "כדאי לשייך אותן כדי שהמעקב יהיה מדויק.",
-    primary: {
-      label: "שייך עכשיו",
-      act: {
-        kind: "ring",
-        ring: "unbudgeted"
+  if (ubList.length > 0) {
+    const ubSum = ubList.reduce((s, e) => s + (+e.amount || 0), 0);
+    const totalExp = (calc.active || []).reduce((s, e) => s + (+e.amount || 0), 0);
+    const ubPct = totalExp > 0 ? Math.round(ubSum / totalExp * 100) : 0;
+    out.push({
+      id: `unbudgeted:${ym}:${ubList.length}:${Math.round(ubSum / 100) * 100}`,
+      level: "red",
+      icon: "🧾",
+      title: `יש ${ubList.length} ${ubList.length === 1 ? "הוצאה" : "הוצאות"} ללא תקציב`,
+      desc: `${ubList.length} ${ubList.length === 1 ? "הוצאה" : "הוצאות"} (סה״כ ${shekel(ubSum)}) אינן מתוקצבות — ${ubPct}% מההוצאות.`,
+      primary: {
+        label: "הצג הוצאות",
+        act: {
+          kind: "ring",
+          ring: "unbudgeted"
+        }
+      }
+    });
+  }
+  // תובנת עומס עסקאות בתשלומים — חודש נוכחי, קריאה בלבד
+  if ((calc.income || 0) > 0 && mState === "current") {
+    const instThisMonth = (calc.active || []).filter(e => e.installments);
+    const instGroups = new Set(instThisMonth.map(e => e.installments.id));
+    const instSum = instThisMonth.reduce((s, e) => s + (+e.amount || 0), 0);
+    const instPct = Math.round(instSum / calc.income * 100);
+    const groupCount = instGroups.size;
+    const isOverload = instPct >= 30 || groupCount >= 5 && instPct >= 10;
+    const isManyLowPct = groupCount >= 5 && instPct < 10;
+    if (isOverload) {
+      out.push({
+        id: `inst-load:${ym}:${groupCount}:${Math.round(instPct / 5) * 5}`,
+        level: "yellow",
+        icon: "💳",
+        title: `עומס עסקאות בתשלומים — ${instPct}% מההכנסה`,
+        desc: `${groupCount} ${groupCount === 1 ? "עסקה פעילה" : "עסקאות פעילות"} בסך ${shekel(instSum)} החודש.`,
+        primary: {
+          label: "הצג עסקאות",
+          act: {
+            kind: "instLoadDetail"
+          }
+        }
+      });
+    } else if (isManyLowPct) {
+      out.push({
+        id: `inst-many:${ym}:${groupCount}`,
+        level: "blue",
+        icon: "💳",
+        title: `יש ${groupCount} עסקאות בתשלומים פעילות`,
+        desc: `סך התשלומים החודש ${shekel(instSum)} — ${instPct}% מההכנסה.`,
+        primary: {
+          label: "הצג עסקאות",
+          act: {
+            kind: "instLoadDetail"
+          }
+        }
+      });
+    }
+  }
+  // תובנת יתרה שבועית — חודש נוכחי בלבד, קריאה בלבד. מבוססת על המודל המאוחד.
+  if ((calc.income || 0) > 0 && mState === "current") {
+    const RM = reserveModel(calc, ym, data);
+    const available = RM.recommendedReserve;
+    if (available > 0.5 && RM.remainingDays >= 1) {
+      const underWeek = RM.remainingDays < 7;
+      const perWeek = RM.perWeek;
+      const perDay = RM.perDay;
+      out.push({
+        id: `weekly:${ym}:${Math.round(available / 100) * 100}:${Math.round(RM.remainingDays / 3)}`,
+        level: "blue",
+        icon: "\uD83D\uDDD3\uFE0F",
+        title: underWeek ? `יישארו כ-${shekel(perDay)} ליום עד סוף החודש` : `יישארו כ-${shekel(perWeek)} לשבוע עד סוף החודש`,
+        desc: underWeek ? `נותרו ${RM.remainingDays} ימים בחודש. הסכום מחושב ממה שמומלץ להשאיר ביתרה.` : `לפי ${RM.remainingDays} ימים שנותרו והסכום המומלץ להשאיר ביתרה.`,
+        primary: {
+          label: "הצג חישוב",
+          act: {
+            kind: "weeklyDetail"
+          }
+        }
+      });
+    }
+  }
+  // תובנת יתרה/חיסכון — מבוססת על הערכת ארבעת המצבים. מציעה רק כשיש ערך אמיתי.
+  if ((calc.income || 0) > 0 && mState === "current") {
+    const RM = reserveModel(calc, ym, data);
+    const A = redistributeAssessment(RM);
+    if (RM.availableBeforeSavings > 0 && A.hasProposal) {
+      if (A.state === "critical") {
+        // 🔴 היתרה נמוכה מהמינימום — אפשר להפחית חיסכון
+        const gain = RM.round10(RM.proposedAvailable - RM.currentAvailable);
+        out.push({
+          id: `liq-critical:${ym}:${Math.round((RM.minimumRecommendedBalance - RM.currentAvailable) / 100) * 100}`,
+          level: "yellow",
+          icon: "\uD83D\uDEDF",
+          title: "היתרה שתישאר נמוכה מהמומלץ",
+          desc: `הפחתת יעד החיסכון תשאיר ${shekel(gain)} יותר זמינים עד סוף החודש.`,
+          primary: {
+            label: "בדוק חלוקה",
+            act: {
+              kind: "redistribute"
+            }
+          }
+        });
+      } else if (A.state === "canSaveMore") {
+        // 🔵 יתרה גבוהה — אפשר לחסוך יותר
+        const extra = RM.round10(RM.proposedSavings - RM.curGoal);
+        out.push({
+          id: `liq-savemore:${ym}:${Math.round(extra / 100) * 100}`,
+          level: "blue",
+          icon: "\uD83D\uDCB0",
+          title: RM.curGoal > 0 ? `אפשר להגדיל את החיסכון בעוד ${shekel(extra)}` : "אפשר להתחיל לחסוך החודש",
+          desc: RM.curGoal > 0 ? `נשאר מרווח מעל הסכום המומלץ להשאיר ביתרה — אפשר להפנות עוד ${shekel(extra)} לחיסכון.` : `לאחר שמירת ${shekel(RM.minimumRecommendedBalance)} ביתרה, אפשר להפנות עד ${shekel(RM.proposedSavings)} לחיסכון.`,
+          primary: {
+            label: RM.curGoal > 0 ? "בדוק חלוקה" : "הצע יעד חיסכון",
+            act: {
+              kind: "redistribute"
+            }
+          }
+        });
+      } else if (A.state === "improve") {
+        const isReduce = RM.recommendationType === "reduce";
+        out.push({
+          id: `liq-improve:${ym}:${A.proposedDelta}`,
+          level: "blue",
+          icon: "\u2696\uFE0F",
+          title: "אפשר לשפר את החלוקה החודש",
+          desc: isReduce ? `הפחתת יעד החיסכון תשאיר יותר כסף זמין ביתרה.` : `אפשר להתאים את יעד החיסכון לזמן שנותר בחודש.`,
+          primary: {
+            label: "בדוק חלוקה",
+            act: {
+              kind: "redistribute"
+            }
+          }
+        });
       }
     }
-  });
+  }
+  // תובנת הוצאות קבועות — חוזרות פעילות (לא תשלומים), כולל מתוקצבות; קריאה בלבד
+  const fixedItems = (calc.active || []).filter(e => e.recur && +e.recur.freq && !e.installments);
+  if (fixedItems.length > 0 && (calc.income || 0) > 0) {
+    const fixedSum = fixedItems.reduce((s, e) => s + (+e.amount || 0), 0);
+    const fixedPct = Math.round(fixedSum / calc.income * 100);
+    if (fixedPct >= 55) {
+      const fixedVerb = mState === "past" ? "היו" : mState === "future" ? "צפויות להוות" : "מהוות";
+      out.push({
+        id: `fixed-high:${ym}:${Math.round(fixedPct / 5) * 5}`,
+        level: "yellow",
+        icon: "🔁",
+        title: `ההוצאות הקבועות ${fixedVerb} ${fixedPct}% מההכנסה`,
+        desc: `${fixedItems.length} ${fixedItems.length === 1 ? "הוצאה קבועה" : "הוצאות קבועות"} בסך ${shekel(fixedSum)} מתוך ${shekel(calc.income)}.`,
+        primary: {
+          label: "הצג פירוט",
+          act: {
+            kind: "fixedDetail"
+          }
+        }
+      });
+    }
+  }
   if (calc.projected < 0) {
-    const names = ins.groups.filter(g => g.budget && !g.budget.fixed && g.used > 0).slice(0, 3).map(g => g.name);
+    // תורמים לחריגה: התקציב הגמיש הגדול ביותר + עסקת התשלומים הגדולה ביותר בחודש זה
+    const flexBudgets = ins.groups.filter(g => g.budget && !g.budget.fixed && g.used > 0).sort((a, b) => b.used - a.used);
+    const topBudget = flexBudgets[0];
+    const instItems = calc.active.filter(e => e.installments).sort((a, b) => (+b.amount || 0) - (+a.amount || 0));
+    const topInst = instItems[0];
+    let contribDesc;
+    if (topBudget && topInst) {
+      contribDesc = `רוב החריגה הצפויה נובעת מתקציב ${topBudget.name} ומעסקת התשלומים של ${topInst.name}.`;
+    } else if (topBudget) {
+      contribDesc = `רוב החריגה הצפויה נובעת מתקציב ${topBudget.name}.`;
+    } else if (topInst) {
+      contribDesc = `רוב החריגה הצפויה נובעת מעסקת התשלומים של ${topInst.name}.`;
+    } else {
+      contribDesc = "החריגה הצפויה נובעת ממספר הוצאות ותקציבים.";
+    }
     out.push({
-      id: `overspend:${ym}:${Math.round(-calc.projected)}`,
+      id: `overspend:${ym}:${Math.round(-calc.projected / 100) * 100}`,
       level: "red",
       icon: "⚠️",
       title: `צפויה חריגה של ${shekel(-calc.projected)} בסוף החודש`,
-      desc: names.length ? `אפשר לצמצם ב${names.join(" / ")}.` : "כדאי לצמצם בתקציבים הגמישים.",
+      desc: contribDesc,
       primary: {
-        label: "הצג המלצות",
+        label: "הצג פירוט",
         act: {
           kind: "ring",
           ring: "opportunity"
@@ -3509,7 +4199,7 @@ function buildInsights(data, calc, ym) {
     title: "כל ההוצאות משויכות לתקציבים",
     desc: "המעקב שלך מדויק החודש."
   });
-  return out;
+  return gateInsights(out, calc, ym, data);
 }
 function Carousel({
   pages,
@@ -3821,7 +4511,7 @@ function RingsCarousel({
     const fixedB = (calc.budgets || []).filter(b => b.fixed);
     const plannedFlex = flexB.reduce((s, b) => s + (+b.target || 0), 0);
     const plannedFixed = fixedB.reduce((s, b) => s + (+b.target || 0), 0);
-    const goal = +data.savingsGoal || 0;
+    const goal = goalFor(data, ym);
     const projected = calc.projected || 0;
     const income = calc.income || 0;
     const instThis = (data.expenses || []).filter(e => e.installments && e.ym === ym);
@@ -3973,6 +4663,23 @@ function RingsCarousel({
       onRing: onRing,
       activeRing: activeRing
     });
+  }
+  // רינג "כמה נשאר לשבוע" — חודש נוכחי בלבד, מבוסס על אותו reserveModel
+  {
+    const RMr = reserveModel(calc, ym, data);
+    if (RMr.st === "current" && RMr.currentAvailable > 0 && RMr.remainingDays >= 1) {
+      const underWk = RMr.remainingDays < 7;
+      const rate = underWk ? RMr.currentPerDay : RMr.currentPerWeek;
+      const unit = underWk ? "ליום" : "לשבוע";
+      ringList.push({
+        pct: 100,
+        center: `${shekel(rate)}`,
+        color: rate <= 0 ? RED : GREEN,
+        label: "🗓️ זמין לשבוע",
+        value: "עד סוף החודש",
+        open: "weeklyDetail"
+      });
+    }
   }
   if (ins.closest) ringList.push({
     pct: Math.min(100, ins.closest.ratio * 100),
@@ -4165,7 +4872,7 @@ function RingDetail({
   const rdName = monthNameOf(ym);
   // ===== Sheets ייעודיים לרינגים של חודש עתידי (תחזית בלבד) =====
   if (rdFuture && (ring === "futBalance" || ring === "futSavings" || ring === "futBudgets" || ring === "futFixed" || ring === "futInst")) {
-    const fGoal = +data.savingsGoal || 0;
+    const fGoal = goalFor(data, ym);
     const fProj = calc.projected || 0;
     const fSaved = Math.min(fGoal, Math.max(0, fProj));
     const fOver = Math.max(0, fProj - fGoal);
@@ -4266,7 +4973,7 @@ function RingDetail({
         className: "space-y-1.5 mb-3"
       }, /*#__PURE__*/React.createElement(Row, {
         emoji: "📊",
-        name: "צפוי שייצא בפועל",
+        name: "צפוי שייצא",
         right: shekel(expected)
       }), /*#__PURE__*/React.createElement(Row, {
         emoji: "🎯",
@@ -4401,32 +5108,54 @@ function RingDetail({
       onTap: () => onOpenBudget && onOpenBudget(x.b)
     }))));
   } else if (ring === "sumSavings") {
-    title = rdFuture ? `תחזית ${rdName}` : "יעד החיסכון";
+    const gGoal = repD.goal,
+      gSaved = repD.saved;
+    const gMissing = Math.max(0, gGoal - gSaved);
+    const gOver = Math.max(0, (calc.projected || 0) - gGoal);
+    const gPct = gGoal > 0 ? Math.round(gSaved / gGoal * 100) : 0;
+    title = rdFuture ? `תחזית החיסכון ב${rdName}` : "סיכום החיסכון";
+    const statusTxt = gGoal <= 0 ? "לא הוגדר יעד" : gSaved <= 0 ? rdFuture ? "לא צפויה יתרה לחיסכון" : "לא נשמרה יתרה לחיסכון" : gMissing > 0.5 ? rdFuture ? `פחות מהיעד ב-${shekel(gMissing)}` : `נשמר ${gPct}% מהיעד` : rdFuture ? "צפוי לעמוד ביעד" : "היעד הושג";
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-      className: "text-center mb-4"
+      className: "text-center mb-1"
     }, /*#__PURE__*/React.createElement("div", {
       className: "font-extrabold text-[30px] leading-none tabular-nums",
       style: {
-        color: repD.goalMet ? EMERALD : RED
+        color: gSaved <= 0 ? RED : gMissing > 0.5 ? AMBER : EMERALD
       }
-    }, shekel(repD.saved)), /*#__PURE__*/React.createElement("div", {
-      className: "text-[12px] text-stone-400 mt-1"
-    }, rdFuture ? repD.goalMet ? "צפוי להישמר לחיסכון לפי התכנון" : `יעד מתוכנן של ${shekel(repD.goal)}` : repD.goalMet ? "נשמר לחיסכון — היעד הושג" : `מתוך יעד של ${shekel(repD.goal)}`)), /*#__PURE__*/React.createElement(Flow, {
-      steps: [{
-        k: rdFuture ? "יתרה צפויה לפני חיסכון" : "יתרה לפני חיסכון",
-        v: calc.projected || 0,
-        neg: (calc.projected || 0) < 0
-      }, {
-        k: rdFuture ? "צפוי להישמר לחיסכון" : "נשמר לחיסכון",
-        v: repD.saved,
-        sign: "−"
-      }, {
-        k: rdFuture ? `צפוי להישאר בסוף ${rdName}` : "נותר בסוף החודש",
-        v: (calc.projected || 0) - repD.saved,
-        strong: true,
-        neg: (calc.projected || 0) - repD.saved < 0
-      }]
-    }));
+    }, shekel(gSaved))), /*#__PURE__*/React.createElement("div", {
+      className: "text-center text-[12px] text-stone-400 mb-4"
+    }, rdFuture ? "צפוי להישמר לחיסכון" : "נשמר לחיסכון"), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-center mb-4"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "rounded-full px-3.5 py-1 text-[11.5px] font-bold",
+      style: {
+        background: gSaved <= 0 ? "rgba(180,35,24,0.10)" : gMissing > 0.5 ? "rgba(245,160,40,0.14)" : "rgba(23,160,94,0.13)",
+        color: gSaved <= 0 ? RED : gMissing > 0.5 ? AMBER : EMERALD
+      }
+    }, statusTxt)), gGoal > 0 ? /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, /*#__PURE__*/React.createElement(Row, {
+      emoji: "🎯",
+      name: "יעד החיסכון",
+      right: shekel(gGoal)
+    }), /*#__PURE__*/React.createElement(Row, {
+      emoji: "🐷",
+      name: rdFuture ? "צפוי להישמר" : "נשמר בפועל",
+      sub: `${gPct}% מהיעד`,
+      right: shekel(gSaved)
+    }), gMissing > 0.5 ? /*#__PURE__*/React.createElement(Row, {
+      emoji: "⚠️",
+      name: "חסר ליעד",
+      right: shekel(gMissing),
+      rightColor: AMBER
+    }) : null, gOver > 0.5 ? /*#__PURE__*/React.createElement(Row, {
+      emoji: "💰",
+      name: "יתרה נוספת מעבר ליעד",
+      right: shekel(gOver),
+      rightColor: EMERALD
+    }) : null) : /*#__PURE__*/React.createElement("div", {
+      className: "text-center text-stone-400 text-[13px] py-4"
+    }, "לא הוגדר יעד חיסכון לחודש זה."));
   } else if (ring === "sumTopExp") {
     title = rdFuture ? `הוצאות מתוכננות ב${rdName}` : "ההוצאות הגדולות החודש";
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -6945,6 +7674,7 @@ function ExpenseForm({
   ym,
   onSave,
   onSaveMany,
+  onSaveRecurScoped,
   onSaveInstallmentGroup,
   onReplaceWithInstallments,
   onClose,
@@ -6983,6 +7713,7 @@ function ExpenseForm({
   const instMinCount = Math.max(1, instPaidCount);
   const recurEdit = isEdit && editing.recur && +editing.recur.freq ? editing : null;
   const recurEff = recurEdit ? (() => {
+    if (recurEdit.monthEdits && recurEdit.monthEdits[ym] && recurEdit.monthEdits[ym].amount != null) return +recurEdit.monthEdits[ym].amount || 0;
     if (!recurEdit.amountHistory || !recurEdit.amountHistory.length) return +recurEdit.amount || 0;
     let a = +recurEdit.amount || 0;
     [...recurEdit.amountHistory].sort((x, y) => ymIndex(x.fromYm) - ymIndex(y.fromYm)).forEach(hh => {
@@ -6991,21 +7722,42 @@ function ExpenseForm({
     return a;
   })() : 0;
   const [recurAsk, setRecurAsk] = useState(false);
+  const [recurEditAsk, setRecurEditAsk] = useState(null); // פופ-אפ "עדכון הוצאה חוזרת" — מחזיק את השדות לשמירה
   const vocab = useMemo(() => buildVocab(data), [data]);
   const cats = data.categories || [];
   const budgets = data.budgets || [];
-  const initBudget = editing?.budgetId ?? prefill?.budgetId ?? null;
-  const initCat = editing?.catId ?? prefill?.catId ?? (initBudget && (budgets.find(b => b.id === initBudget) || {}).catId) ?? null;
-  const [name, setName] = useState(editing?.name || prefill?.name || "");
+  // override חודשי קיים לחודש המוצג (עריכת "רק החודש" קודמת) — טוענים ממנו
+  const xmEdit = recurEdit && recurEdit.monthEdits && ym ? recurEdit.monthEdits[ym] : null;
+  const initBudget = (xmEdit && xmEdit.budgetId !== undefined ? xmEdit.budgetId : editing?.budgetId) ?? prefill?.budgetId ?? null;
+  const initCat = (xmEdit && xmEdit.catId != null ? xmEdit.catId : editing?.catId) ?? prefill?.catId ?? (initBudget && (budgets.find(b => b.id === initBudget) || {}).catId) ?? null;
+  const [name, setName] = useState((xmEdit && xmEdit.name) || editing?.name || prefill?.name || "");
   const [amount, setAmount] = useState(recurEdit ? String(recurEff) : instEdit ? String(Math.round(instTotal * 100) / 100) : editing?.amount != null ? String(editing.amount) : prefill?.amount != null ? String(prefill.amount) : "");
   const [catId, setCatId] = useState(initCat);
   const [budgetId, setBudgetId] = useState(initBudget);
   const cat = cats.find(c => c.id === catId);
-  const [emoji, setEmoji] = useState(editing?.emoji || prefill?.emoji || (budgets.find(b => b.id === initBudget) || {}).emoji || cat && cat.emoji || "🧾");
+  const [emoji, setEmoji] = useState((xmEdit && xmEdit.emoji) || editing?.emoji || prefill?.emoji || (budgets.find(b => b.id === initBudget) || {}).emoji || cat && cat.emoji || "🧾");
   const defaultDate = ym === todayYM() ? todayISO() : ym + "-15";
-  const [date, setDate] = useState(isISO(editing?.date) ? editing.date : isISO(prefill?.date) ? prefill.date : defaultDate);
-  const [note, setNote] = useState(editing?.note || prefill?.note || "");
-  const [noteOpen, setNoteOpen] = useState(!!(editing?.note || prefill?.note));
+  // תאריך אפקטיבי להוצאה חוזרת: היום-בחודש של הסדרה, מוקרן לחודש המוצג.
+  // override חודשי (xmEdit.date) גובר. עסקאות תשלומים לא מושפעות (הן לא recurEdit).
+  const recurEffDate = (() => {
+    if (!recurEdit) return null;
+    if (xmEdit && isISO(xmEdit.date)) return xmEdit.date;
+    const src = isISO(editing.date) ? editing.date : (editing.ym || ym) + "-01";
+    let day = +(src.slice(8, 10) || 1);
+    // dayHistory: שינוי יום-בחודש שחל מחודש מסוים והלאה
+    if (Array.isArray(editing.dayHistory)) {
+      [...editing.dayHistory].sort((a, b) => ymIndex(a.fromYm) - ymIndex(b.fromYm)).forEach(h => {
+        if (ymIndex(h.fromYm) <= ymIndex(ym)) day = +h.day;
+      });
+    }
+    const [yy, mm] = ym.split("-");
+    const lastDay = new Date(+yy, +mm, 0).getDate();
+    const d = Math.min(day, lastDay);
+    return `${yy}-${mm}-${String(d).padStart(2, "0")}`;
+  })();
+  const [date, setDate] = useState(recurEffDate ? recurEffDate : isISO(editing?.date) ? editing.date : isISO(prefill?.date) ? prefill.date : defaultDate);
+  const [note, setNote] = useState((xmEdit && xmEdit.note) || editing?.note || prefill?.note || "");
+  const [noteOpen, setNoteOpen] = useState(!!((xmEdit && xmEdit.note) || editing?.note || prefill?.note));
   const [creating, setCreating] = useState(false);
   const [nbName, setNbName] = useState("");
   const [nbAmount, setNbAmount] = useState("");
@@ -7192,24 +7944,17 @@ function ExpenseForm({
       return;
     }
     if (recurEdit) {
-      const amountChanged = Math.round(+amount) !== Math.round(recurEff);
-      if (amountChanged) {
-        setRecurAsk(true);
-        return;
-      }
-      // שינוי מטא-דאטה/תאריך בהוצאה חוזרת: אם התאריך שונה — מזיזים את העוגן (ym+date) כך שהמחזור נספר מחדש מהתאריך החדש
-      const baseRec = (data.expenses || []).find(x => x.id === editing.id) || editing;
-      const newDate = isISO(date) ? date : baseRec.date;
-      const newYm = isISO(date) ? date.slice(0, 7) : baseRec.ym;
-      onSave({
-        ...baseRec,
+      // כל שינוי בהוצאה חוזרת (שם/סכום/אייקון/הערה/קטגוריה/תקציב/תדירות/תאריך) → פופ-אפ היקף.
+      // התאריך שנבחר הוא של המופע בחודש המוצג; העוגן (ym/date המקורי) לא זז — כדי לא לשבור עבר.
+      setRecurEditAsk({
         name: name.trim(),
         emoji,
         catId,
         budgetId: budgetId || null,
         note,
-        date: newDate,
-        ym: newYm
+        amount: +amount,
+        date: isISO(date) ? date : null,
+        freq: +recurFreq || 1
       });
       return;
     }
@@ -7881,9 +8626,9 @@ function ExpenseForm({
       background: "transparent",
       color: GREEN
     }
-  }, "ביטול")))), document.body), recurAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+  }, "ביטול")))), document.body), recurEditAsk && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center px-6",
-    onClick: () => setRecurAsk(false),
+    onClick: () => setRecurEditAsk(null),
     style: {
       zIndex: 85,
       background: "rgba(38,42,55,0.4)",
@@ -7900,34 +8645,57 @@ function ExpenseForm({
       animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
     }
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-center text-[26px] mb-2"
-  }, "\uD83D\uDD01"), /*#__PURE__*/React.createElement("div", {
     className: "text-center font-bold text-[17px] mb-2",
     style: {
       color: INK
     }
-  }, "שינוי סכום הוצאה חוזרת"), /*#__PURE__*/React.createElement("div", {
+  }, "עדכון הוצאה חוזרת"), /*#__PURE__*/React.createElement("div", {
     className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
-  }, "השינוי יחול מהחודש הבא ואילך. החודשים שכבר עברו לא ישתנו."), /*#__PURE__*/React.createElement("div", {
+  }, `להחיל את השינויים רק על ${monthNameOf(ym)}, או גם על החודשים הבאים?`), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-2.5"
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: emitRecurAmount,
-    className: "w-full rounded-2xl font-bold text-[15px] text-white transition-transform active:scale-[0.98]",
+    onClick: () => {
+      const f = recurEditAsk;
+      setRecurEditAsk(null);
+      onSaveRecurScoped(editing.id, f, "month");
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-white text-center transition-transform active:scale-[0.98]",
     style: {
-      height: 53,
-      background: greenGrad,
-      boxShadow: "0 8px 18px -8px rgba(47,90,210,0.55)"
+      background: greenGrad
     }
-  }, "עדכן מהחודש הבא"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setRecurAsk(false),
-    className: "w-full rounded-2xl font-semibold text-[15px] transition-transform active:scale-[0.98]",
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `רק ${monthNameOf(ym)}`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
     style: {
-      height: 53,
-      background: "#f1f2f6",
-      color: INK,
-      border: "1px solid rgba(122,134,158,0.14)"
+      color: "rgba(255,255,255,0.85)"
     }
-  }, "בטל")))), document.body));
+  }, "השינויים יחולו רק בחודש המוצג.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const f = recurEditAsk;
+      setRecurEditAsk(null);
+      onSaveRecurScoped(editing.id, f, "future");
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `מ${monthNameOf(ym)} והלאה`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, "השינויים יחולו בחודש המוצג ובכל החודשים הבאים. חודשים קודמים לא ישתנו.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setRecurEditAsk(null),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")))), document.body));
 }
 
 /* ============================ טופס תקציב ============================ */
@@ -9176,7 +9944,7 @@ function FinancialProfileSheet({
 }) {
   const total = incomeFor(data, ym);
   const nSrc = (data.incomeSources || []).length;
-  const goal = +data.savingsGoal || 0;
+  const goal = goalFor(data, ym);
   const [confirm, setConfirm] = useState(false);
   const [popClosing, setPopClosing] = useState(false);
   const closePop = cb => {
@@ -9292,13 +10060,20 @@ function FinancialProfileSheet({
 }
 function IncomeEditor({
   data,
+  ym,
   onAdd,
   onEdit,
   onBack,
   onClose
 }) {
   const sources = data.incomeSources || [];
-  const total = sources.reduce((s, x) => s + (+x.amount || 0), 0);
+  const applies = s => ym ? incomeApplies(s, ym) : true;
+  const isRecur = s => !!(s.recur && +s.recur.freq);
+  // חד־פעמי שייך אך ורק לחודש שלו — לא רלוונטי כלל לחודשים אחרים (לא נספר, לא מוצג).
+  // קבוע/חוזר תמיד רלוונטי (מעומעם אם החודש מחוץ לפאזה שלו).
+  const visible = sources.filter(s => isRecur(s) || applies(s));
+  const total = visible.reduce((s, x) => s + (applies(x) ? +x.amount || 0 : 0), 0);
+  const mName = ym ? monthNameOf(ym) : "";
   return /*#__PURE__*/React.createElement(Sheet, {
     title: "הגדרות הכנסה",
     subtitle: "הרכיבו את ההכנסה מכמה רכיבים",
@@ -9314,44 +10089,50 @@ function IncomeEditor({
     style: {
       color: GREEN
     }
-  }, "סה״כ הכנסה"), /*#__PURE__*/React.createElement("span", {
+  }, mName ? `סה״כ הכנסה ב${mName}` : "סה״כ הכנסה"), /*#__PURE__*/React.createElement("span", {
     className: "text-[21px] font-extrabold tabular-nums",
     style: {
       color: GREEN
     }
   }, shekel(total))), /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mb-2"
-  }, sources.length, " ", sources.length === 1 ? "רכיב הכנסה" : "רכיבי הכנסה"), /*#__PURE__*/React.createElement("div", {
+  }, visible.length, " ", visible.length === 1 ? "רכיב הכנסה" : "רכיבי הכנסה"), /*#__PURE__*/React.createElement("div", {
     className: "space-y-2 mb-3"
-  }, sources.map(s => /*#__PURE__*/React.createElement("button", {
-    key: s.id,
-    onClick: () => onEdit(s),
-    className: "w-full flex items-center gap-3 rounded-2xl px-3.5 py-3 transition-transform active:scale-[0.99]",
-    style: field
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "grid place-items-center rounded-xl shrink-0 text-[18px]",
-    style: {
-      width: 38,
-      height: 38,
-      background: "rgba(122,134,158,0.10)"
-    }
-  }, s.emoji || "💰"), /*#__PURE__*/React.createElement("span", {
-    className: "flex-1 text-right min-w-0"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "block font-bold text-[14.5px] truncate",
-    style: {
-      color: INK
-    }
-  }, s.name), /*#__PURE__*/React.createElement("span", {
-    className: "block text-[11.5px] text-stone-400 mt-0.5"
-  }, s.recur && +s.recur.freq ? freqLabel(s.recur.freq) : "חד־פעמי", isISO(s.date) ? ` · ${fmtDate(s.date)}` : "")), /*#__PURE__*/React.createElement("span", {
-    className: "font-bold tabular-nums text-[15px]",
-    style: {
-      color: GREEN
-    }
-  }, shekel(+s.amount || 0)))), sources.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, visible.map(s => {
+    const on = applies(s);
+    return /*#__PURE__*/React.createElement("button", {
+      key: s.id,
+      onClick: () => onEdit(s),
+      className: "w-full flex items-center gap-3 rounded-2xl px-3.5 py-3 transition-transform active:scale-[0.99]",
+      style: {
+        ...field,
+        opacity: on ? 1 : 0.5
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "grid place-items-center rounded-xl shrink-0 text-[18px]",
+      style: {
+        width: 38,
+        height: 38,
+        background: "rgba(122,134,158,0.10)"
+      }
+    }, s.emoji || "💰"), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 text-right min-w-0"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "block font-bold text-[14.5px] truncate",
+      style: {
+        color: INK
+      }
+    }, s.name), /*#__PURE__*/React.createElement("span", {
+      className: "block text-[11.5px] text-stone-400 mt-0.5"
+    }, s.recur && +s.recur.freq ? freqLabel(s.recur.freq) : "חד־פעמי", isISO(s.date) ? ` · ${fmtDate(s.date)}` : "", !on && mName ? Array.isArray(s.skipMonths) && s.skipMonths.indexOf(ym) >= 0 ? ` · לא פעילה ב${mName}` : ` · לא חל ב${mName}` : "")), /*#__PURE__*/React.createElement("span", {
+      className: "font-bold tabular-nums text-[15px]",
+      style: {
+        color: on ? GREEN : "#a8a29e"
+      }
+    }, shekel(+s.amount || 0)));
+  }), visible.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "text-center text-[13px] text-stone-400 py-6"
-  }, "אין רכיבי הכנסה עדיין")), /*#__PURE__*/React.createElement("button", {
+  }, sources.length ? `אין רכיבי הכנסה שחלים על ${mName || "חודש זה"}` : "אין רכיבי הכנסה עדיין")), /*#__PURE__*/React.createElement("button", {
     onClick: onAdd,
     className: "w-full rounded-2xl h-12 font-bold text-white transition-transform active:scale-[0.98]",
     style: {
@@ -9364,12 +10145,22 @@ function IncomeSourceForm({
   ym,
   onSave,
   onDelete,
+  onReactivate,
   onBack,
   onClose
 }) {
-  const [name, setName] = useState(editing?.name || "");
-  const [emoji, setEmoji] = useState(editing?.emoji || "💰");
-  const [amount, setAmount] = useState(String(editing?.amount || ""));
+  const [delAsk, setDelAsk] = useState(false);
+  const [reAsk, setReAsk] = useState(false);
+  const [editScope, setEditScope] = useState(null);
+  const skippedThisMonth = !!(editing && editing.recur && +editing.recur.freq && ym && Array.isArray(editing.skipMonths) && editing.skipMonths.indexOf(ym) >= 0);
+  // האם ההכנסה כבר פעילה בחודש הבא? אם כן — ההשבתה היא של חודש בודד, ואין מה "להחזיר מהחודש והלאה".
+  const nextActive = skippedThisMonth ? incomeApplies(editing, shiftYM(ym, 1)) : false;
+  const singleMonthGap = skippedThisMonth && nextActive; // מצב 1: בוטלה רק בחודש המוצג
+  // אם קיים override חודשי לחודש המוצג — טוענים את הערכים שלו (עריכה "רק החודש" קודמת)
+  const mEdit = editing && editing.monthEdits && ym ? editing.monthEdits[ym] : null;
+  const [name, setName] = useState((mEdit && mEdit.name) || editing?.name || "");
+  const [emoji, setEmoji] = useState((mEdit && mEdit.emoji) || editing?.emoji || "💰");
+  const [amount, setAmount] = useState(String((mEdit && mEdit.amount != null ? mEdit.amount : editing?.amount) || ""));
   // תאריך ברירת מחדל = החודש המוצג (לא "היום"), כדי שהכנסה שנוספת בחודש קודם תישמר לאותו חודש
   const defaultIncomeDate = ym && ym !== todayYM() ? ym + "-05" : todayISO();
   const [date, setDate] = useState(isISO(editing?.date) ? editing.date : defaultIncomeDate);
@@ -9378,10 +10169,9 @@ function IncomeSourceForm({
   const [note, setNote] = useState(editing?.note || "");
   const isEdit = !!editing;
   const valid = +amount > 0;
-  const save = () => {
-    if (!valid) return;
+  const buildSrc = () => {
     const srcYm = date.slice(0, 7);
-    onSave({
+    return {
       id: editing && editing.id || uid(),
       name: name.trim() || "הכנסה",
       emoji: emoji || "💰",
@@ -9397,9 +10187,19 @@ function IncomeSourceForm({
         startYm: editing && editing.startYm || srcYm
       } : {}),
       note: note.trim()
-    });
+    };
   };
-  return /*#__PURE__*/React.createElement(Sheet, {
+  const save = () => {
+    if (!valid) return;
+    const obj = buildSrc();
+    // עריכת הכנסה קבועה קיימת → לשאול על היקף השינוי (רק החודש / מהחודש והלאה)
+    if (isEdit && recur && +freq && ym) {
+      setEditScope(obj);
+      return;
+    }
+    onSave(obj);
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Sheet, {
     title: isEdit ? "עריכת הכנסה" : "הכנסה חדשה",
     subtitle: isEdit ? null : "משכורת, בונוס, קצבה, החזר…",
     onBack: onBack,
@@ -9442,10 +10242,17 @@ function IncomeSourceForm({
     placeholder: "הערה",
     className: "w-full h-11 px-3 rounded-2xl outline-none text-[14px] text-stone-700",
     style: field
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mt-4"
-  }, isEdit && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onDelete(editing.id),
+  }), skippedThisMonth ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => setReAsk(true),
+    className: "w-full rounded-2xl h-12 font-bold text-[14px] mt-4 transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, "↩︎ החזר הכנסה") : null, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 mt-2"
+  }, isEdit && !skippedThisMonth && /*#__PURE__*/React.createElement("button", {
+    onClick: () => editing.recur && +editing.recur.freq ? setDelAsk(true) : onDelete(editing.id, "all"),
     className: "rounded-2xl h-12 px-4 font-semibold text-[13px]",
     style: {
       ...field,
@@ -9462,12 +10269,237 @@ function IncomeSourceForm({
     style: {
       background: valid ? greenGrad : "#c7ccda"
     }
-  }, isEdit ? "שמור" : "הוסף")));
+  }, isEdit ? "שמור" : "הוסף"))), delAsk && isEdit && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: () => setDelAsk(false),
+    style: {
+      zIndex: 130,
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2",
+    style: {
+      color: INK
+    }
+  }, "מחיקת הכנסה קבועה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, `ההכנסה "${editing.name || "ההכנסה"}" בסך ${shekel(+editing.amount || 0)} מוגדרת כהכנסה קבועה. האם למחוק אותה רק מ${monthNameOf(ym)}, או מ${monthNameOf(ym)} והלאה?`), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setDelAsk(false);
+      onDelete(editing.id, "onward", ym);
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-white text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `מחיקה מ${monthNameOf(ym)} והלאה`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, `ההכנסה תימחק מ${monthNameOf(ym)} ומכל החודשים הבאים. חודשים קודמים יישארו ללא שינוי.`)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setDelAsk(false);
+      onDelete(editing.id, "month", ym);
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `מחיקה מ${monthNameOf(ym)} בלבד`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, `רק ההכנסה של ${monthNameOf(ym)} תימחק. שאר החודשים יישארו ללא שינוי.`)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDelAsk(false),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")))), document.body), reAsk && isEdit && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: () => setReAsk(false),
+    style: {
+      zIndex: 130,
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2",
+    style: {
+      color: INK
+    }
+  }, "החזרת הכנסה קבועה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, singleMonthGap ? `ההכנסה "${editing.name || "ההכנסה"}" בסך ${shekel(+editing.amount || 0)} אינה פעילה ב${monthNameOf(ym)} בלבד. שאר החודשים כבר פעילים.` : `ההכנסה "${editing.name || "ההכנסה"}" בסך ${shekel(+editing.amount || 0)} אינה פעילה ב${monthNameOf(ym)}. איך להחזיר אותה?`), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, singleMonthGap ?
+  // מצב 1 — בוטלה רק בחודש המוצג: כפתור יחיד
+  /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setReAsk(false);
+      onReactivate(editing.id, "month", ym);
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-white text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `החזר ב${monthNameOf(ym)}`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, `ההכנסה תחזור רק ב${monthNameOf(ym)}. שאר החודשים כבר פעילים ולא ישתנו.`)) :
+  // מצב 2/3 — לא פעילה מהחודש והלאה: שתי אפשרויות
+  /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setReAsk(false);
+      onReactivate(editing.id, "future", ym);
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-white text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, "החזר מהחודש הזה והלאה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, `ההכנסה תחזור ב${monthNameOf(ym)} ובכל החודשים הבאים.`)), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setReAsk(false);
+      onReactivate(editing.id, "month", ym);
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `החזר רק ב${monthNameOf(ym)}`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, `ההכנסה תחזור רק ב${monthNameOf(ym)}. החודשים הבאים יישארו לא פעילים.`))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setReAsk(false),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")))), document.body), editScope && ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: () => setEditScope(null),
+    style: {
+      zIndex: 130,
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2",
+    style: {
+      color: INK
+    }
+  }, "עדכון הכנסה קבועה"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, `להחיל את השינויים רק על ${monthNameOf(ym)}, או גם על החודשים הבאים?`), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const o = editScope;
+      setEditScope(null);
+      onSave(o, "month");
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-white text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `רק ${monthNameOf(ym)}`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, "השינוי יחול רק בחודש המוצג.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const o = editScope;
+      setEditScope(null);
+      onSave(o, "future");
+    },
+    className: "w-full rounded-2xl px-4 py-3 text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `מ${monthNameOf(ym)} והלאה`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, "השינוי יחול בחודש המוצג ובכל החודשים הבאים. חודשים קודמים לא ישתנו.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditScope(null),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")))), document.body));
 }
 function GoalSheet({
   goal,
   projected,
   income,
+  ym,
+  hasMonthGoal,
   onSave,
   onBack,
   onClose
@@ -9475,6 +10507,8 @@ function GoalSheet({
   const room = Math.max(0, Math.round(projected));
   const cap = Math.max(0, Math.round(+income || 0));
   const [v, setV] = useState(String(+goal || 0));
+  const [scope, setScope] = useState(hasMonthGoal ? "month" : "every"); // "every" = כל חודש, "month" = רק החודש המוצג
+  const mName = ym ? monthNameOf(ym) : "";
   const target = +v || 0;
   let hint, hintColor;
   if (target <= 0) {
@@ -9510,13 +10544,35 @@ function GoalSheet({
       color: hintColor
     }
   }, hint), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl p-1 flex gap-1 mb-3",
+    style: {
+      background: "rgba(122,134,158,0.10)"
+    }
+  }, [{
+    k: "every",
+    label: "כל חודש"
+  }, {
+    k: "month",
+    label: ym ? `רק ${mName}` : "רק החודש"
+  }].map(o => /*#__PURE__*/React.createElement("button", {
+    key: o.k,
+    onClick: () => setScope(o.k),
+    className: "flex-1 rounded-xl h-9 text-[13px] font-bold transition-transform active:scale-95",
+    style: {
+      background: scope === o.k ? "#fff" : "transparent",
+      color: scope === o.k ? GREEN : "#78716c",
+      boxShadow: scope === o.k ? "0 1px 3px rgba(32,40,56,0.12)" : "none"
+    }
+  }, o.label))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11.5px] text-stone-400 leading-snug mb-3 px-1"
+  }, scope === "every" ? "היעד יחול על כל החודשים שאין להם יעד מיוחד." : `היעד יחול על ${mName || "החודש המוצג"} בלבד, ולא ישנה את שאר החודשים.`), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     className: "flex-1 rounded-2xl h-11 font-semibold text-stone-600",
     style: field
   }, "ביטול"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => onSave(target),
+    onClick: () => onSave(target, scope),
     className: "flex-1 rounded-2xl h-11 font-bold text-white transition-transform active:scale-[0.98]",
     style: {
       background: greenGrad
@@ -11082,6 +12138,868 @@ function BudgetDeleteDialog({
     style: field
   }, "ביטול"));
 }
+function RecurExpenseDeleteDialog({
+  expense,
+  ym,
+  onMonth,
+  onOnward,
+  onCancel
+}) {
+  const mName = monthNameOf(ym);
+  const startsThisMonth = expense.ym === ym;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center px-6",
+    onClick: onCancel,
+    style: {
+      zIndex: 130,
+      background: "rgba(38,42,55,0.4)",
+      backdropFilter: "blur(3px)",
+      WebkitBackdropFilter: "blur(3px)",
+      animation: "dimIn 180ms ease forwards"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    onClick: e => e.stopPropagation(),
+    className: "w-full max-w-[360px] rounded-[26px] px-6 py-6",
+    style: {
+      background: "#ffffff",
+      boxShadow: "0 24px 60px -20px rgba(32,40,56,0.5), 0 6px 16px -8px rgba(32,40,56,0.2)",
+      animation: "popIn 200ms cubic-bezier(.32,.72,0,1) both"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-bold text-[17px] mb-2",
+    style: {
+      color: INK
+    }
+  }, "מחיקת הוצאה חוזרת"), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[13.5px] text-stone-500 mb-6 leading-relaxed px-1"
+  }, `ההוצאה "${expense.name || "ההוצאה"}" בסך ${shekel(+expense.amount || 0)} מוגדרת כהוצאה חוזרת. איך למחוק אותה?`), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onMonth,
+    className: "w-full rounded-2xl px-4 py-3 text-white text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `הסר רק מ${mName}`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(255,255,255,0.85)"
+    }
+  }, `ההוצאה לא תופיע ב${mName} ותחזור בחודשים הבאים.`)), /*#__PURE__*/React.createElement("button", {
+    onClick: onOnward,
+    className: "w-full rounded-2xl px-4 py-3 text-center transition-transform active:scale-[0.98]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-[15px]"
+  }, `הפסק מ${mName} והלאה`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-0.5 leading-snug",
+    style: {
+      color: "rgba(47,111,237,0.7)"
+    }
+  }, startsThisMonth ? `ההוצאה תוסר מ${mName} ומכל החודשים הבאים.` : `ההוצאה תוסר מ${mName} ומכל החודשים הבאים. חודשים קודמים יישארו ללא שינוי.`)), /*#__PURE__*/React.createElement("button", {
+    onClick: onCancel,
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול"))));
+}
+function InstLoadDetailSheet({
+  data,
+  calc,
+  ym,
+  onClose
+}) {
+  const items = (calc.active || []).filter(e => e.installments).slice().sort((a, b) => (+b.amount || 0) - (+a.amount || 0));
+  const sum = items.reduce((s, e) => s + (+e.amount || 0), 0);
+  const income = calc.income || 0;
+  const pct = income > 0 ? Math.round(sum / income * 100) : 0;
+  const groupOf = gid => (data.expenses || []).filter(x => x.installments && x.installments.id === gid);
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: `עסקאות בתשלומים ב${monthNameOf(ym)}`,
+    subtitle: "מידע בלבד",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center mb-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-extrabold text-[30px] leading-none tabular-nums",
+    style: {
+      color: INK
+    }
+  }, shekel(sum))), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[12px] text-stone-400 mb-4"
+  }, income > 0 ? `${pct}% מההכנסה · ${items.length} ${items.length === 1 ? "עסקה" : "עסקאות"}` : `${items.length} עסקאות`), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5"
+  }, items.length ? items.map(e => {
+    const inst = e.installments;
+    const g = groupOf(inst.id);
+    const left = g.filter(x => ymIndex(x.ym) > ymIndex(ym));
+    const leftSum = left.reduce((s, x) => s + (+x.amount || 0), 0);
+    const isLast = inst.i === inst.n;
+    return /*#__PURE__*/React.createElement("div", {
+      key: e.id,
+      className: "flex items-center gap-3 rounded-2xl px-3.5 py-2.5",
+      style: field
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "grid place-items-center rounded-xl shrink-0 text-[16px]",
+      style: {
+        width: 34,
+        height: 34,
+        background: "rgba(122,134,158,0.10)"
+      }
+    }, e.emoji || "💳"), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 text-right min-w-0"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "block font-bold text-[14px] truncate",
+      style: {
+        color: INK
+      }
+    }, e.name || "עסקה"), /*#__PURE__*/React.createElement("span", {
+      className: "block text-[11px] text-stone-400 mt-0.5"
+    }, isLast ? `תשלום ${inst.i} מתוך ${inst.n} · אחרון` : `תשלום ${inst.i} מתוך ${inst.n} · נותרו ${left.length} · ${shekel(leftSum)}`)), /*#__PURE__*/React.createElement("span", {
+      className: "font-bold tabular-nums text-[14px]",
+      style: {
+        color: INK
+      }
+    }, shekel(+e.amount || 0)));
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-stone-400 text-[13px] py-6"
+  }, "אין עסקאות בתשלומים החודש.")));
+}
+function WeeklyDetailSheet({
+  data,
+  calc,
+  ym,
+  onRedistribute,
+  onClose
+}) {
+  const RM = reserveModel(calc, ym, data);
+  const goal = RM.curGoal;
+  const underWeek = RM.remainingDays > 0 && RM.remainingDays < 7;
+  const unit = underWeek ? "ליום" : "לשבוע";
+  const curAvail = RM.currentAvailable;
+  const curRate = underWeek ? RM.currentPerDay : RM.currentPerWeek;
+  const recAvail = RM.proposedAvailable;
+  const recRate = underWeek ? RM.proposedPerDay : RM.proposedPerWeek;
+  const recSavings = RM.proposedSavings;
+  const availDelta = recAvail - curAvail;
+  const rateDelta = recRate - curRate;
+  const goalDelta = goal - recSavings;
+  const _A = redistributeAssessment(RM);
+  const showProposal = RM.st === "current" && _A.hasProposal;
+  // שורת השוואה בטבלה — עכשיו (ימין) מול מוצע (שמאל)
+  const CmpRow = (label, cur, prop, k) => /*#__PURE__*/React.createElement("div", {
+    key: k,
+    className: "grid items-center py-2",
+    style: {
+      gridTemplateColumns: "1fr auto 1fr auto 1fr",
+      borderTop: k === 0 ? "none" : "1px solid rgba(122,134,158,0.10)"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[12.5px] text-stone-600"
+  }, label), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] font-semibold tabular-nums text-center",
+    style: {
+      color: INK
+    }
+  }, shekel(cur)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] px-1.5",
+    style: {
+      color: "#9ca3af"
+    }
+  }, "\u2190"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[15px] font-extrabold tabular-nums text-center",
+    style: {
+      color: Math.round(prop) !== Math.round(cur) ? GREEN : INK
+    }
+  }, shekel(prop)));
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: "כמה נשאר לשבוע",
+    subtitle: `נכון להיום · ${todayLabel()}`,
+    onClose: onClose
+  },
+  // 1. HERO — המצב הנוכחי
+  /*#__PURE__*/React.createElement("div", {
+    className: "text-center",
+    style: {
+      marginBottom: 24
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-extrabold tabular-nums leading-none",
+    style: {
+      color: INK,
+      fontSize: 44
+    }
+  }, shekel(curRate)), /*#__PURE__*/React.createElement("div", {
+    className: "text-[14px] font-semibold text-stone-500 mt-1.5"
+  }, `${unit} · לפי החלוקה הנוכחית`), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-400 mt-1"
+  }, `נותרו ${RM.remainingDays} ימים · כ-${RM.remainingWeeks.toFixed(1)} שבועות`)),
+  // 2. כרטיס תוצאה — הדבר החשוב ביותר (רק אם יש הצעה משמעותית)
+  showProposal ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl text-center",
+    style: {
+      background: "rgba(47,111,237,0.08)",
+      padding: 16,
+      marginBottom: 24
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12.5px] font-semibold mb-2",
+    style: {
+      color: "#3255a0"
+    }
+  }, "המערכת מצאה חלוקה טובה יותר"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[20px] font-semibold tabular-nums",
+    style: {
+      color: "#9ca3af"
+    }
+  }, shekel(curRate)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[16px]",
+    style: {
+      color: "#9ca3af"
+    }
+  }, "\u2190"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[20px] font-extrabold tabular-nums",
+    style: {
+      color: GREEN
+    }
+  }, `${shekel(recRate)}`)), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] font-semibold text-stone-500 mt-1"
+  }, unit)),
+  // 3. טבלת השוואה
+  /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl",
+    style: {
+      ...field,
+      padding: 16,
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid mb-1",
+    style: {
+      gridTemplateColumns: "1fr auto 1fr auto 1fr"
+    }
+  }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-stone-400 text-center"
+  }, "עכשיו"), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-center",
+    style: {
+      color: GREEN
+    }
+  }, "מוצע")), CmpRow("יתרה צפויה", curAvail, recAvail, 0), CmpRow("יעד החיסכון", goal, recSavings, 1), CmpRow("זמין לשבוע", curRate, recRate, 2)),
+  // 4. שורת מהות השינוי — מודגשת, לפי סוג ההמלצה + הסבר משני קטן
+  (() => {
+    const msg = getRedistributionMessage(RM, _A);
+    const toneBg = msg.tone === "warn" ? "rgba(245,158,11,0.10)" : msg.tone === "positive" ? "rgba(47,160,94,0.09)" : "rgba(47,111,237,0.07)";
+    const toneColor = msg.tone === "warn" ? "#8a5a00" : msg.tone === "positive" ? "#1a7048" : "#3255a0";
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 24
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl px-4 py-3 flex items-start gap-2",
+      style: {
+        background: toneBg
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[15px] leading-none mt-0.5 shrink-0"
+    }, msg.icon), /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] font-semibold leading-relaxed",
+      style: {
+        color: toneColor
+      }
+    }, msg.text)));
+  })(),
+  // 5. כפתור
+  /*#__PURE__*/React.createElement("button", {
+    onClick: onRedistribute,
+    className: "w-full rounded-2xl h-12 font-bold text-white transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, "התאם חלוקה")) :
+  // אין הצעה משמעותית — מסך מידע בלבד
+  /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl text-center",
+    style: {
+      ...field,
+      padding: 16,
+      marginBottom: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 leading-relaxed"
+  }, curAvail > 0.5 ? "החלוקה הנוכחית שלך מאוזנת ביחס לזמן שנותר בחודש." : "לפי החלוקה הנוכחית לא נשארת יתרה זמינה עד סוף החודש.")),
+  // סגור
+  /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px] mt-3",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "סגור"));
+}
+
+function RedistributeSheet({
+  data,
+  calc,
+  ym,
+  onApply,
+  onClose
+}) {
+  const income = calc.income || 0;
+  const projected = calc.projected || 0;
+  const curGoal = goalFor(data, ym);
+  const pot = Math.max(0, Math.round(projected));
+  const mState = monthStateOf(ym);
+  const roundTo10 = n => Math.round(n / 10) * 10;
+  // מודל אחיד — מקור אמת יחיד למרווח ביטחון + מדד שבועי
+  const RM = reserveModel(calc, ym, data);
+  const reserveTarget = RM.recommendedReserve;
+  const safeSavingsCapacity = RM.safeSavingsCapacity;
+  const suggestSavings = RM.recommendedSavings;
+  const [savings, setSavings] = useState(suggestSavings);
+  const [manual, setManual] = useState(false);
+  const step = 10; // צעד קבוע לכפתורי +/− (שינויים מהירים); הקלדה לדיוק
+  const [editSide, setEditSide] = useState(null); // 'save' | 'avail' — איזה כרטיס בעריכת מספר
+  const [draft, setDraft] = useState("");
+  const [whyOpen, setWhyOpen] = useState(false);
+  const available = Math.max(0, pot - savings);
+  const overReserve = Math.max(0, available - reserveTarget);
+  const reserveMissing = Math.max(0, reserveTarget - available);
+  const savePct = pot > 0 ? Math.round(savings / pot * 100) : 0;
+  const availPct = pot > 0 ? 100 - savePct : 0;
+  const setSave = v => setSavings(Math.max(0, Math.min(pot, Math.round(v))));
+  const bumpSave = d => setSave(savings + d);
+  const bumpAvail = d => setSave(savings - d);
+  // מדד שבועי חי — נגזר ממה שיישאר ביתרה (available), לא מהרזרבה הקבועה
+  const remWeeks = RM.remainingWeeks;
+  const remDays = RM.remainingDays;
+  const perWeekLive = mState === "current" && remWeeks >= 1 ? roundTo10(available / remWeeks) : null;
+  // ===== CURRENT — נקודת ייחוס קבועה לפי היעד הפעיל (עמודת "עכשיו") =====
+  const curSavings = RM.currentEffectiveSavings;
+  const curAvailRef = RM.currentAvailable;
+  const curPerWeekRef = mState === "current" && remWeeks >= 1 ? RM.currentPerWeek : null;
+  // מוצע חי (עמודת "מוצע") — savings + available מתעדכנים בזמן אמת
+  const perDayLive = mState === "current" && remDays >= 1 && remDays < 7 ? roundTo10(available / remDays) : null;
+  const underWeek = mState === "current" && remDays > 0 && remDays < 7;
+  // ניסוח שבועי אחיד
+  const weeklyPhrase = underWeek && perDayLive != null ? `כ-${shekel(perDayLive)} ליום` : perWeekLive != null ? `כ-${shekel(perWeekLive)} לשבוע` : null;
+  // מצב שורת "מומלץ להשאיר ביתרה"
+  let reserveState, reserveColor;
+  if (available <= 0.5) {
+    reserveState = "לא יישאר ביתרה";
+    reserveColor = AMBER;
+  } else if (reserveMissing > 0.5) {
+    reserveState = `חסרים כ-${shekel(roundTo10(reserveMissing))}`;
+    reserveColor = AMBER;
+  } else if (overReserve > 9.5) {
+    reserveState = `כ-${shekel(roundTo10(overReserve))} מעל המומלץ`;
+    reserveColor = EMERALD;
+  } else {
+    reserveState = "תואם למומלץ";
+    reserveColor = EMERALD;
+  }
+  // באנר מפרש — משלב את המדד השבועי, בשפה אחידה
+  let bannerIcon, bannerText, bannerBg, bannerColor;
+  if (pot <= 0) {
+    bannerIcon = "\u26A0\uFE0F";
+    bannerText = "כרגע אין מרווח בטוח לחיסכון — ההוצאות הידועות משתמשות בכל ההכנסה.";
+    bannerBg = "rgba(245,158,11,0.10)";
+    bannerColor = "#8a5a00";
+  } else if (available <= 0.5) {
+    bannerIcon = "\u26A0\uFE0F";
+    bannerText = "כל היתרה הופנתה לחיסכון ולא יישאר סכום זמין בחשבון.";
+    bannerBg = "rgba(245,158,11,0.10)";
+    bannerColor = "#8a5a00";
+  } else if (reserveMissing > 0.5) {
+    bannerIcon = "\uD83D\uDFE1";
+    bannerText = weeklyPhrase ? `יישארו רק ${weeklyPhrase} עד סוף החודש. החלוקה נמוכה מההמלצה.` : "היתרה שתישאר תהיה נמוכה מהמומלץ להשאיר ביתרה.";
+    bannerBg = "rgba(245,158,11,0.10)";
+    bannerColor = "#8a5a00";
+  } else if (overReserve > 9.5) {
+    bannerIcon = "\uD83D\uDD35";
+    bannerText = `אפשר להגדיל את החיסכון בעוד כ-${shekel(roundTo10(overReserve))} ועדיין לשמור על המומלץ להשאיר ביתרה.`;
+    bannerBg = "rgba(47,111,237,0.08)";
+    bannerColor = "#3255a0";
+  } else {
+    bannerIcon = "\uD83D\uDFE2";
+    bannerText = mState === "future" ? "זו הערכה שמרנית לפי הנתונים שהוזנו כרגע." : weeklyPhrase ? `חלוקה מאוזנת — יישארו ${weeklyPhrase} עד סוף החודש.` : "חלוקה מאוזנת — היתרה שתישאר תואמת למומלץ.";
+    bannerBg = "rgba(47,160,94,0.10)";
+    bannerColor = "#1a7048";
+  }
+  // כרטיס קופה — משתמש בסטייל הלבן הסטנדרטי, +/− ניטרליים (לא ירוק/אדום)
+  const availLow = available < reserveTarget - 0.5;
+  const commitEdit = (side, raw) => {
+    let v = Math.round(+String(raw).replace(/[^\d.]/g, "") || 0);
+    v = Math.max(0, Math.min(pot, v)); // הגבלה אוטומטית לטווח החוקי
+    if (side === "save") setSave(v);else setSave(pot - v); // צד הזמין = מראה
+    setEditSide(null);
+    setDraft("");
+  };
+  const PotCard = (side, dot, label, val, onMinus, onPlus, minusDis, plusDis, valColor) => /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-3",
+    style: field
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-2"
+  }, /*#__PURE__*/React.createElement("span", null, dot), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13.5px] font-semibold",
+    style: {
+      color: INK
+    }
+  }, label)), manual ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onMinus,
+    disabled: minusDis,
+    className: "grid place-items-center rounded-xl shrink-0 text-[20px] font-bold transition-transform active:scale-90",
+    style: {
+      width: 42,
+      height: 42,
+      background: "#fff",
+      border: "1px solid rgba(122,134,158,0.28)",
+      color: minusDis ? "#c7ccda" : INK
+    }
+  }, "\u2212"), editSide === side ? /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    type: "number",
+    inputMode: "numeric",
+    value: draft,
+    onChange: e => setDraft(e.target.value),
+    onBlur: () => commitEdit(side, draft),
+    onKeyDown: e => {
+      if (e.key === "Enter") commitEdit(side, draft);
+    },
+    className: "flex-1 min-w-0 text-center font-extrabold text-[20px] tabular-nums outline-none bg-transparent",
+    style: {
+      color: INK,
+      borderBottom: `2px solid ${GREEN}`,
+      maxWidth: 110
+    }
+  }) : /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setEditSide(side);
+      setDraft(String(Math.round(val)));
+    },
+    className: "font-extrabold text-[20px] tabular-nums",
+    style: {
+      color: valColor || INK,
+      borderBottom: "1px dashed rgba(122,134,158,0.4)",
+      lineHeight: 1.4
+    }
+  }, shekel(val)), /*#__PURE__*/React.createElement("button", {
+    onClick: onPlus,
+    disabled: plusDis,
+    className: "grid place-items-center rounded-xl shrink-0 text-[20px] font-bold transition-transform active:scale-90",
+    style: {
+      width: 42,
+      height: 42,
+      background: "#fff",
+      border: "1px solid rgba(122,134,158,0.28)",
+      color: plusDis ? "#c7ccda" : INK
+    }
+  }, "+")) : /*#__PURE__*/React.createElement("div", {
+    className: "text-center font-extrabold text-[22px] tabular-nums",
+    style: {
+      color: valColor || INK
+    }
+  }, shekel(val)));
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: `חלוקה מחדש ל${monthNameOf(ym)}`,
+    subtitle: "רק לחודש זה",
+    onClose: onClose
+  },
+  // ב. הקשר קטן
+  /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[12.5px] text-stone-400 mb-3"
+  }, `מתוך ${shekel(pot)} שנשארו החודש`),
+  // טבלת השוואה — עכשיו (ימין) מול מוצע (שמאל). מוצע מתעדכן בזמן אמת.
+  /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-3 mb-3",
+    style: field
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid mb-1.5",
+    style: {
+      gridTemplateColumns: "1fr auto 1fr auto 1fr"
+    }
+  }, /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-stone-400 text-center"
+  }, "עכשיו"), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] font-bold text-center",
+    style: {
+      color: GREEN
+    }
+  }, "מוצע")), [["לחיסכון", curSavings, savings, EMERALD], ["יתרה צפויה", curAvailRef, available, GREEN], ...(curPerWeekRef != null && perWeekLive != null ? [["זמין לשבוע", curPerWeekRef, perWeekLive, GREEN]] : [])].map(([label, cur, prop, col], k) => /*#__PURE__*/React.createElement("div", {
+    key: k,
+    className: "grid items-center py-1.5",
+    style: {
+      gridTemplateColumns: "1fr auto 1fr auto 1fr",
+      borderTop: k === 0 ? "none" : "1px solid rgba(122,134,158,0.10)"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[12.5px] text-stone-600"
+  }, label), /*#__PURE__*/React.createElement("span", null), /*#__PURE__*/React.createElement("span", {
+    className: "text-[14px] font-semibold tabular-nums text-center",
+    style: {
+      color: INK
+    }
+  }, shekel(cur)), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] px-1.5",
+    style: {
+      color: "#9ca3af"
+    }
+  }, "\u2190"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[15px] font-extrabold tabular-nums text-center",
+    style: {
+      color: Math.round(prop) !== Math.round(cur) ? col : INK
+    }
+  }, shekel(prop)))) ),
+  // משפט השפעה — מדבר על המשמעות, לא חוזר על הטבלה
+  Math.round(savings) !== Math.round(curSavings) && /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] leading-relaxed text-stone-500 text-center mb-3 px-2"
+  }, (() => {
+    const gd = curSavings - savings;
+    const wd = perWeekLive != null && curPerWeekRef != null ? perWeekLive - curPerWeekRef : 0;
+    if (gd > 0 && wd > 0) return `הפחתת יעד החיסכון ב-${shekel(roundTo10(gd))} תוסיף כ-${shekel(roundTo10(wd))} לכל שבוע שנותר.`;
+    if (gd > 0) return `הפחתת יעד החיסכון ב-${shekel(roundTo10(gd))} תגדיל את היתרה הצפויה באותו סכום.`;
+    if (gd < 0) return `הגדלת יעד החיסכון ב-${shekel(roundTo10(-gd))} תקטין את היתרה הזמינה באותו סכום.`;
+    return "";
+  })()),
+  // ג. באנר תובנה
+  /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-3.5 py-2.5 mb-3 text-[12.5px] leading-relaxed text-center font-medium",
+    style: {
+      background: bannerBg,
+      color: bannerColor
+    }
+  }, bannerIcon + " " + bannerText),
+  // ד. פס החלוקה
+  /*#__PURE__*/React.createElement("div", {
+    className: "mb-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex rounded-full overflow-hidden",
+    style: {
+      height: 12,
+      background: "rgba(122,134,158,0.12)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${savePct}%`,
+      background: GREEN,
+      transition: "width 160ms ease"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${availPct}%`,
+      background: availLow ? AMBER : EMERALD,
+      transition: "width 160ms ease"
+    }
+  }))),
+  /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between text-[11px] font-semibold mb-3 px-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: GREEN
+    }
+  }, `${savePct}% לחיסכון`), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: availLow ? "#8a5a00" : EMERALD
+    }
+  }, `${availPct}% ביתרה`)),
+  // ה. כרטיסי החלוקה עם steppers — נפתחים באנימציה במצב התאמה ידנית
+  /*#__PURE__*/React.createElement(Collapse, {
+    open: manual
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-2 mb-2"
+  }, PotCard("save", "\uD83D\uDD35", "לחיסכון", savings, () => bumpSave(-step), () => bumpSave(step), savings <= 0, savings >= pot, INK), PotCard("avail", "\uD83D\uDFE9", "יישאר ביתרה", available, () => bumpAvail(-step), () => bumpAvail(step), available <= 0, available >= pot, availLow ? AMBER : INK))),
+  // ו. שורת הרזרבה המומלצת
+  /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between px-1 mb-3 text-[12px]"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-400"
+  }, `מומלץ להשאיר ביתרה: ${shekel(reserveTarget)}`), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold",
+    style: {
+      color: reserveColor
+    }
+  }, reserveState)),
+  // בורר קפיצה הוסר — צעד קבוע 10 לכפתורים, הקלדה חופשית לדיוק
+
+  // ז. פירוט מתקפל — למה זו הצעה? (סגור כברירת מחדל, אנימציית Collapse)
+  /*#__PURE__*/React.createElement("div", {
+    className: "mb-3"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setWhyOpen(v => !v),
+    className: "flex items-center gap-1.5 mx-auto",
+    style: {
+      color: "#8a8681"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "shrink-0 grid place-items-center rounded-full",
+    style: {
+      width: 18,
+      height: 18,
+      border: "1.4px solid rgba(122,134,158,0.5)",
+      color: "#8a8681",
+      fontSize: 11,
+      fontWeight: 700,
+      lineHeight: 1
+    }
+  }, "i"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] font-semibold"
+  }, "למה זו הצעה?")), /*#__PURE__*/React.createElement(Collapse, {
+    open: whyOpen
+  }, /*#__PURE__*/React.createElement("ul", {
+    className: "text-[12px] leading-relaxed text-stone-500 mt-2.5 space-y-1.5 px-1"
+  }, /*#__PURE__*/React.createElement("li", null, `\u2022 היתרה הצפויה תגדל מ-${shekel(curAvailRef)} ל-${shekel(available)}.`), perWeekLive != null && /*#__PURE__*/React.createElement("li", null, `\u2022 יעמדו לרשותך כ-${shekel(perWeekLive)} לשבוע עד סוף החודש.`), /*#__PURE__*/React.createElement("li", null, "\u2022 ההמלצה מבוססת על ההכנסות, ההוצאות, התקציבים ומספר הימים שנותרו בחודש.")))),
+  // ח. כפתורים
+  /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 space-y-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => onApply(ym, {
+      goal: Math.round(savings)
+    }),
+    className: "w-full rounded-2xl h-12 font-bold text-white transition-transform active:scale-[0.98]",
+    style: {
+      background: greenGrad
+    }
+  }, `החל על ${monthNameOf(ym)}`), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setManual(m => !m),
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "#DBE6FA",
+      color: GREEN
+    }
+  }, manual ? "חזור להצעה" : "התאם ידנית"), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול")));
+}
+function ReserveDetailSheet({
+  data,
+  calc,
+  ym,
+  onClose
+}) {
+  const RM = reserveModel(calc, ym, data);
+  const goal = goalFor(data, ym);
+  const effSavings = Math.min(goal, Math.max(0, RM.projected));
+  const finalLeft = RM.projected - effSavings;
+  const reserveMissing = Math.max(0, RM.recommendedReserve - finalLeft);
+  const overReserve = Math.max(0, finalLeft - RM.recommendedReserve);
+  const Row = (label, val, color, strong) => /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between rounded-2xl px-3.5 py-2.5",
+    style: strong ? {
+      background: "rgba(47,111,237,0.08)"
+    } : field
+  }, /*#__PURE__*/React.createElement("span", {
+    className: strong ? "text-[13.5px] font-bold" : "text-[13px] text-stone-600",
+    style: strong ? {
+      color: INK
+    } : {}
+  }, label), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold tabular-nums text-[14px]",
+    style: {
+      color: color || INK
+    }
+  }, shekel(val)));
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: `היתרה ב${monthNameOf(ym)}`,
+    subtitle: "מידע בלבד",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-stone-400 leading-relaxed mb-4"
+  }, "הסכום המומלץ להשאיר ביתרה הוא כסף שנשאר זמין בחשבון עד סוף החודש, להוצאות שטרם תוכננו. הוא נגזר מהזמן שנותר בחודש."), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5"
+  }, Row("היתרה שנשארה החודש", RM.projected, RM.projected >= 0 ? GREEN : RED), goal > 0 ? Row("צפוי להישמר לחיסכון", effSavings, INK) : null, Row("יישאר ביתרה", finalLeft, INK, true), Row("מומלץ להשאיר ביתרה", RM.recommendedReserve, INK), reserveMissing > 0.5 ? Row("חסר כדי להגיע למומלץ", reserveMissing, AMBER) : null, overReserve > 0.5 ? Row("מעל המומלץ להשאיר ביתרה", overReserve, EMERALD) : null));
+}
+
+function FixedExpensesSheet({
+  calc,
+  ym,
+  onClose
+}) {
+  const items = (calc.active || []).filter(e => e.recur && +e.recur.freq && !e.installments).slice().sort((a, b) => (+b.amount || 0) - (+a.amount || 0));
+  const sum = items.reduce((s, e) => s + (+e.amount || 0), 0);
+  const income = calc.income || 0;
+  const pct = income > 0 ? Math.round(sum / income * 100) : 0;
+  const afterFixed = income - sum;
+  const st = monthStateOf(ym);
+  const titlePrefix = st === "future" ? "הוצאות קבועות צפויות ב" : "הוצאות קבועות ב";
+  const afterLabel = st === "future" ? "צפוי להישאר אחרי הקבועות" : "נשאר אחרי הקבועות";
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: `${titlePrefix}${monthNameOf(ym)}`,
+    subtitle: "מידע בלבד",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-center mb-1"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-extrabold text-[30px] leading-none tabular-nums",
+    style: {
+      color: INK
+    }
+  }, shekel(sum))), /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-[12px] text-stone-400 mb-4"
+  }, income > 0 ? `${pct}% מההכנסה (${shekel(income)})` : `${items.length} הוצאות קבועות`), income > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-3.5 py-3 mb-4 flex items-center justify-between",
+    style: {
+      background: "rgba(47,111,237,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold",
+    style: {
+      color: "#3255a0"
+    }
+  }, afterLabel), /*#__PURE__*/React.createElement("span", {
+    className: "text-[15px] font-extrabold tabular-nums",
+    style: {
+      color: afterFixed >= 0 ? GREEN : RED
+    }
+  }, shekel(afterFixed))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5"
+  }, items.length ? items.map(e => /*#__PURE__*/React.createElement("div", {
+    key: e.id,
+    className: "flex items-center gap-3 rounded-2xl px-3.5 py-2.5",
+    style: field
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "grid place-items-center rounded-xl shrink-0 text-[16px]",
+    style: {
+      width: 34,
+      height: 34,
+      background: "rgba(122,134,158,0.10)"
+    }
+  }, e.emoji || "🔁"), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 text-right min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block font-bold text-[14px] truncate",
+    style: {
+      color: INK
+    }
+  }, e.name), /*#__PURE__*/React.createElement("span", {
+    className: "block text-[11px] text-stone-400 mt-0.5"
+  }, freqLabel(e.recur.freq))), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold tabular-nums text-[14px]",
+    style: {
+      color: INK
+    }
+  }, shekel(+e.amount || 0))) ) : /*#__PURE__*/React.createElement("div", {
+    className: "text-center text-stone-400 text-[13px] py-6"
+  }, "אין הוצאות קבועות החודש.")));
+}
+function NameMergeSheet({
+  data,
+  names,
+  to,
+  ym,
+  onMerge,
+  onClose
+}) {
+  const [finalName, setFinalName] = useState(to);
+  const [editing, setEditing] = useState(false);
+  const mName = monthNameOf(ym);
+  // סטטיסטיקה לכל שם: כמה הוצאות, טווח חודשים, כמה יושפעו מהחודש והלאה
+  const stats = names.map(nm => {
+    const items = (data.expenses || []).filter(e => e.name === nm);
+    const yms = items.map(e => e.ym).filter(Boolean).sort();
+    // עסקאות בתשלומים נספרות כעסקה אחת (לפי installments.id), לא לפי כל תשלום
+    const instGroups = new Set();
+    let singles = 0,
+      recurs = 0;
+    items.forEach(e => {
+      if (e.installments && e.installments.id) instGroups.add(e.installments.id);else if (e.recur && +e.recur.freq) recurs++;else singles++;
+    });
+    const instCount = instGroups.size;
+    // תווית סוג: מרכיבים תיאור לפי מה שקיים
+    const parts = [];
+    if (singles) parts.push(`${singles} ${singles === 1 ? "הוצאה" : "הוצאות"}`);
+    if (recurs) parts.push(`${recurs} ${recurs === 1 ? "הוצאה חוזרת" : "הוצאות חוזרות"}`);
+    if (instCount) parts.push(`${instCount} ${instCount === 1 ? "עסקה בתשלומים" : "עסקאות בתשלומים"}`);
+    return {
+      name: nm,
+      label: parts.join(" · ") || "0 הוצאות",
+      first: yms[0],
+      last: yms[yms.length - 1]
+    };
+  });
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: "איחוד שמות דומים",
+    subtitle: "בדקו את הפרטים לפני האיחוד",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] text-stone-500 leading-relaxed mb-4"
+  }, "המערכת מצאה הוצאות שעשויות להתייחס לאותו מקום. בדקו את הפרטים לפני האיחוד."), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2 mb-4"
+  }, stats.map(st => /*#__PURE__*/React.createElement("div", {
+    key: st.name,
+    className: "flex items-center justify-between rounded-2xl px-3.5 py-2.5",
+    style: field
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-right min-w-0"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "block font-bold text-[14px] truncate",
+    style: {
+      color: INK
+    }
+  }, st.name), /*#__PURE__*/React.createElement("span", {
+    className: "block text-[11px] text-stone-400 mt-0.5"
+  }, st.first ? `${monthLabelOf(st.first)}${st.last && st.last !== st.first ? " – " + monthLabelOf(st.last) : ""}` : "")), /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] font-semibold text-stone-500 shrink-0 text-left",
+    style: {
+      maxWidth: 120
+    }
+  }, st.label)))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] font-semibold text-stone-500 mb-1.5"
+  }, "שם מאוחד"), editing ? /*#__PURE__*/React.createElement("input", {
+    autoFocus: true,
+    value: finalName,
+    onChange: e => setFinalName(e.target.value),
+    className: "w-full h-11 px-3.5 rounded-2xl outline-none text-[15px] text-right mb-2",
+    style: field
+  }) : /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditing(true),
+    className: "w-full flex items-center justify-between rounded-2xl px-3.5 h-11 mb-2",
+    style: field
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-[15px]",
+    style: {
+      color: INK
+    }
+  }, finalName), /*#__PURE__*/React.createElement("span", {
+    className: "text-[12px] text-stone-400"
+  }, "שנה")), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-3.5 py-3 mb-4 text-[12px] leading-relaxed",
+    style: {
+      background: "rgba(47,111,237,0.08)",
+      color: "#3255a0"
+    }
+  }, `האיחוד יחול מ${monthLabelOf(ym)} והלאה. חודשים קודמים לא ישתנו.`), /*#__PURE__*/React.createElement("button", {
+    onClick: () => finalName.trim() && onMerge(names, finalName.trim(), ym),
+    disabled: !finalName.trim(),
+    className: "w-full rounded-2xl h-12 font-bold text-white transition-transform active:scale-[0.98] mb-2",
+    style: {
+      background: finalName.trim() ? greenGrad : "#c7ccda"
+    }
+  }, `אחד ל"${finalName.trim() || "…"}" מ${mName} והלאה`), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    className: "w-full rounded-2xl h-11 font-semibold text-[15px]",
+    style: {
+      background: "transparent",
+      color: GREEN
+    }
+  }, "ביטול"));
+}
 function CategoryDeleteDialog({
   cat,
   data,
@@ -11279,10 +13197,10 @@ function App() {
     return {
       income,
       status,
-      goal: +data.savingsGoal || 0,
+      goal: goalFor(data, ym),
       monthLabel: HEB_MONTHS[m - 1] + " " + y
     };
-  }, [calc, ym, data.savingsGoal]);
+  }, [calc, ym, data.savingsGoal, data.savingsGoalByMonth]);
   const vocab = useMemo(() => buildVocab(data), [data]);
   const insights = useMemo(() => buildInsights(data, calc, ym), [data, ym, calc]);
   const iState = data.insightState || {
@@ -11325,10 +13243,10 @@ function App() {
   /* התראה: יעד החיסכון הפך ללא־ריאלי (למשל אחרי הקטנת הכנסה) */
   const goalWatch = useRef({
     ym,
-    ok: (+data.savingsGoal || 0) <= 0 || calc.projected >= (+data.savingsGoal || 0)
+    ok: goalFor(data, ym) <= 0 || calc.projected >= goalFor(data, ym)
   });
   useEffect(() => {
-    const goal = +data.savingsGoal || 0;
+    const goal = goalFor(data, ym);
     const ok = goal <= 0 || calc.projected >= goal;
     const prev = goalWatch.current;
     if (prev.ym === ym && prev.ok && !ok && goal > 0) {
@@ -11341,7 +13259,7 @@ function App() {
       ym,
       ok
     };
-  }, [calc.projected, data.savingsGoal, ym]);
+  }, [calc.projected, data.savingsGoal, data.savingsGoalByMonth, ym]);
   const budgetOf = id => (data.budgets || []).find(b => b.id === id);
   const catOf = id => (data.categories || []).find(c => c.id === id);
   const showToast = (msg, undo) => setToast({
@@ -11435,17 +13353,44 @@ function App() {
       }
     };
   });
-  const mergeExpenseNames = (names, to) => {
+  const mergeExpenseNames = (names, to, fromYm) => {
     const prev = data;
+    const wYm = fromYm || ym;
     const set = new Set(names);
-    setData(d => ({
-      ...d,
-      expenses: d.expenses.map(e => set.has(e.name) ? {
-        ...e,
-        name: to
-      } : e)
-    }));
-    showToast(`השמות אוחדו ל"${to}"`, () => setData(prev));
+    setData(d => {
+      const expenses = (d.expenses || []).map(e => {
+        if (!set.has(e.name) || e.name === to) return e;
+        // חד-פעמי / תשלום: שינוי שם ישיר רק על מופעים מהחודש המוצג והלאה (עבר נשמר)
+        if (!(e.recur && +e.recur.freq)) {
+          return ymIndex(e.ym) >= ymIndex(wYm) ? {
+            ...e,
+            name: to
+          } : e;
+        }
+        // חוזרת: nameHistory מהחודש המוצג והלאה, בלי לגעת בשם הבסיסי (עבר לפי השם הישן)
+        const hist = (e.nameHistory || []).filter(h => h.fromYm !== wYm);
+        return {
+          ...e,
+          nameHistory: [...hist, {
+            fromYm: wYm,
+            name: to
+          }]
+        };
+      });
+      // aliases גלובליים — מונעים כפילות עתידית בהזנה חדשה
+      const aliases = {
+        ...(d.nameAliases || {})
+      };
+      names.forEach(n => {
+        if (n !== to) aliases[n] = to;
+      });
+      return {
+        ...d,
+        expenses,
+        nameAliases: aliases
+      };
+    });
+    showToast(`השמות אוחדו ל"${to}" מ${monthNameOf(wYm)} והלאה`, () => setData(prev));
   };
   const openInsights = () => setModal({
     type: "insights"
@@ -11462,8 +13407,11 @@ function App() {
       return;
     }
     if (act.kind === "mergeNames") {
-      mergeExpenseNames(act.names, act.to);
-      closeModal();
+      setModal({
+        type: "nameMerge",
+        names: act.names,
+        to: act.to
+      });
       return;
     }
     closeModal();
@@ -11471,6 +13419,16 @@ function App() {
       if (act.kind === "ring") setModal({
         type: "ringDetail",
         ring: act.ring
+      });else if (act.kind === "fixedDetail") setModal({
+        type: "fixedDetail"
+      });else if (act.kind === "reserveDetail") setModal({
+        type: "reserveDetail"
+      });else if (act.kind === "weeklyDetail") setModal({
+        type: "weeklyDetail"
+      });else if (act.kind === "instLoadDetail") setModal({
+        type: "instLoadDetail"
+      });else if (act.kind === "redistribute") setModal({
+        type: "redistribute"
       });else if (act.kind === "budget") {
         const b = budgetOf(act.id);
         if (b) setModal({
@@ -11504,18 +13462,30 @@ function App() {
   /* הוצאות */
   const doUpsertExpense = (e, editing) => {
     const prev = data;
+    // מיפוי alias — שם שכבר אוחד ממופה לשם הקנוני, גם בהוצאה חדשה וגם בעריכה.
+    // ההמרה גלויה: אם השם שונה, מוצגת הודעה מפורשת (לא המרה שקטה).
+    const canonical = data.nameAliases && data.nameAliases[e.name];
+    const wasAliased = !!canonical && canonical !== e.name;
+    const aliased = wasAliased ? {
+      ...e,
+      name: canonical
+    } : e;
     setData(d => {
-      const ex = d.expenses.some(x => x.id === e.id);
+      const ex = d.expenses.some(x => x.id === aliased.id);
       return {
         ...d,
-        expenses: ex ? d.expenses.map(x => x.id === e.id ? e : x) : [e, ...d.expenses]
+        expenses: ex ? d.expenses.map(x => x.id === aliased.id ? aliased : x) : [aliased, ...d.expenses]
       };
     });
     closeModal();
-    const bud = data.budgets.find(b => b.id === e.budgetId);
-    const catName = (data.categories.find(c => c.id === e.catId) || {}).name;
+    const bud = data.budgets.find(b => b.id === aliased.budgetId);
+    const catName = (data.categories.find(c => c.id === aliased.catId) || {}).name;
     const where = bud ? `לתקציב ${bud.name}` : catName ? `בקטגוריה ${catName}` : "כהוצאה לא מתוקצבת";
-    showToast(editing ? `${e.name} עודכן` : `${e.name} על סך ${shekel(e.amount)} נוסף ${where}`, () => setData(prev));
+    if (wasAliased) {
+      showToast(`השם "${e.name}" אוחד בעבר ויוצג כ"${canonical}"`, () => setData(prev));
+    } else {
+      showToast(editing ? `${aliased.name} עודכן` : `${aliased.name} על סך ${shekel(aliased.amount)} נוסף ${where}`, () => setData(prev));
+    }
   };
   const upsertExpense = e => {
     const editing = data.expenses.some(x => x.id === e.id);
@@ -11662,18 +13632,12 @@ function App() {
   const deleteExpense = id => {
     const prev = data;
     const removed = data.expenses.find(x => x.id === id);
-    // הוצאה חוזרת עם מופעים בעבר — לא מוחקים היסטוריה; עוצרים יצירה מהחודש הבא
-    if (removed && removed.recur && +removed.recur.freq && ymIndex(removed.ym) < ymIndex(ym)) {
-      const stop = addMonths(ym + "-01", 1).slice(0, 7);
-      setData(d => ({
-        ...d,
-        expenses: d.expenses.map(x => x.id === id ? {
-          ...x,
-          endYm: stop
-        } : x)
-      }));
-      closeModal();
-      showToast(`${removed.name} תיפסק מהחודש הבא`, () => setData(prev));
+    // הוצאה חוזרת → פופ-אפ עקבי (הסר רק מהחודש / הפסק מהחודש והלאה), לעולם לא מוחק עבר
+    if (removed && removed.recur && +removed.recur.freq) {
+      setModal({
+        type: "recurExpDelete",
+        expense: removed
+      });
       return;
     }
     setData(d => ({
@@ -11682,6 +13646,164 @@ function App() {
     }));
     closeModal();
     showToast(`${removed ? removed.name : "ההוצאה"} נמחקה`, () => setData(prev));
+  };
+  // פעולות היקף על הוצאה חוזרת (נקראות מהפופ-אפ)
+  const recurExpDelete = (id, scope) => {
+    const prev = data;
+    const removed = data.expenses.find(x => x.id === id);
+    if (!removed) {
+      closeModal();
+      return;
+    }
+    if (scope === "month") {
+      // הסרה רק מהחודש המוצג — חריגה חודשית, שאר החודשים נשמרים
+      setData(d => ({
+        ...d,
+        expenses: d.expenses.map(x => x.id === id ? {
+          ...x,
+          skipMonths: Array.from(new Set([...(x.skipMonths || []), ym]))
+        } : x)
+      }));
+      closeModal();
+      showToast(`${removed.name} הוסרה מ${monthNameOf(ym)}`, () => setData(prev));
+    } else {
+      // "onward" — הפסקה מהחודש המוצג והלאה; endYm מהחודש המוצג, חודשי עבר נשמרים
+      setData(d => ({
+        ...d,
+        expenses: d.expenses.map(x => x.id === id ? {
+          ...x,
+          endYm: ym
+        } : x)
+      }));
+      closeModal();
+      showToast(`${removed.name} תיפסק מ${monthNameOf(ym)}`, () => setData(prev));
+    }
+  };
+  // חלוקה מחדש — כתיבה אחת מסודרת, רק לחודש המוצג. יעד→savingsGoalByMonth, תקציבים→targetByMonth.
+  const applyRedistribution = (targetYm, plan) => {
+    const prev = data;
+    setData(d => {
+      const next = {
+        ...d
+      };
+      // יעד חיסכון לחודש זה בלבד
+      if (plan.goal != null) {
+        next.savingsGoalByMonth = {
+          ...(d.savingsGoalByMonth || {}),
+          [targetYm]: plan.goal
+        };
+      }
+      // תקציבי מעקב — override חודשי (targetByMonth) רק לחודש זה
+      if (plan.budgetTargets && Object.keys(plan.budgetTargets).length) {
+        next.budgets = (d.budgets || []).map(b => {
+          if (!(b.id in plan.budgetTargets)) return b;
+          return {
+            ...b,
+            targetByMonth: {
+              ...(b.targetByMonth || {}),
+              [targetYm]: plan.budgetTargets[b.id]
+            }
+          };
+        });
+      }
+      return next;
+    });
+    closeModal();
+    showToast(`החלוקה עודכנה ל${monthNameOf(targetYm)}`, () => setData(prev));
+  };
+  // עריכת הוצאה חוזרת לפי היקף — "month" = override חודשי תוספתי; "future" = עדכון הרשומה מהחודש והלאה, עבר נשמר
+  const saveRecurExpenseScoped = (id, fields, scope) => {
+    const prev = data;
+    const removed = data.expenses.find(x => x.id === id);
+    if (!removed) {
+      closeModal();
+      return;
+    }
+    if (scope === "month") {
+      // כל השדות (שם/סכום/אייקון/הערה/קטגוריה/תקציב/תאריך) כ-override רק לחודש המוצג
+      setData(d => ({
+        ...d,
+        expenses: d.expenses.map(x => {
+          if (x.id !== id) return x;
+          const overrides = {
+            ...(x.monthEdits || {})
+          };
+          overrides[ym] = {
+            name: fields.name,
+            emoji: fields.emoji,
+            catId: fields.catId,
+            budgetId: fields.budgetId,
+            note: fields.note,
+            amount: fields.amount,
+            ...(isISO(fields.date) ? {
+              date: fields.date
+            } : {})
+          };
+          return {
+            ...x,
+            monthEdits: overrides
+          };
+        })
+      }));
+      closeModal();
+      showToast(`ההוצאה עודכנה ל${monthNameOf(ym)}`, () => setData(prev));
+    } else {
+      // "future" — מעדכן את הרשומה עצמה, מנקה overrides מהחודש והלאה, ומגדיר amountHistory מהחודש המוצג כדי לשמור עבר
+      setData(d => ({
+        ...d,
+        expenses: d.expenses.map(x => {
+          if (x.id !== id) return x;
+          const overrides = {
+            ...(x.monthEdits || {})
+          };
+          Object.keys(overrides).forEach(k => {
+            if (k >= ym) delete overrides[k];
+          });
+          const prevHist = (x.amountHistory || []).filter(hh => hh.fromYm !== ym);
+          const startsHere = x.ym === ym;
+          // שינוי יום-בחודש מהחודש המוצג והלאה — dayHistory, בלי להזיז את עוגן הסדרה (עבר נשמר)
+          let dayHist = x.dayHistory;
+          if (isISO(fields.date)) {
+            const newDay = +fields.date.slice(8, 10);
+            const curDay = startsHere ? +String(x.date || "").slice(8, 10) : null;
+            if (startsHere) {
+              // מתחיל בחודש המוצג — משנים את העוגן עצמו
+            } else {
+              dayHist = [...(x.dayHistory || []).filter(h => h.fromYm !== ym), {
+                fromYm: ym,
+                day: newDay
+              }];
+            }
+          }
+          return {
+            ...x,
+            name: fields.name,
+            emoji: fields.emoji,
+            catId: fields.catId,
+            budgetId: fields.budgetId,
+            note: fields.note,
+            monthEdits: overrides,
+            ...(dayHist ? {
+              dayHistory: dayHist
+            } : {}),
+            ...(startsHere ? {
+              amount: fields.amount,
+              ...(isISO(fields.date) ? {
+                date: fields.date,
+                ym: fields.date.slice(0, 7)
+              } : {})
+            } : {
+              amountHistory: [...prevHist, {
+                fromYm: ym,
+                amount: fields.amount
+              }]
+            })
+          };
+        })
+      }));
+      closeModal();
+      showToast("ההוצאה עודכנה מהחודש והלאה", () => setData(prev));
+    }
   };
   // מחיקת עסקת תשלומים: scope "all" = כל העסקה; "onward" = התשלום הנוכחי וכל העתידיים בלבד (שומר היסטוריה)
   const deleteInstallment = (instId, fromYm, scope) => {
@@ -12064,7 +14186,7 @@ function App() {
   }, /*#__PURE__*/React.createElement(MonthCard, {
     calc: calc,
     ym: ym,
-    savingsGoal: data.savingsGoal,
+    savingsGoal: goalFor(data, ym),
     mode: mode,
     onMode: setMode,
     onEditIncome: () => setModal({
@@ -12088,7 +14210,9 @@ function App() {
     activeRing: modal?.type === "ringDetail" ? modal.ring : modal?.type === "catDetail" ? {
       cat: modal.cat
     } : null,
-    onRing: o => typeof o === "string" ? setModal({
+    onRing: o => o === "weeklyDetail" ? setModal({
+      type: "weeklyDetail"
+    }) : typeof o === "string" ? setModal({
       type: "ringDetail",
       ring: o
     }) : o && o.cat && setModal({
@@ -12578,6 +14702,7 @@ function App() {
     ym: ym,
     onSave: upsertExpense,
     onSaveMany: upsertMany,
+    onSaveRecurScoped: saveRecurExpenseScoped,
     onSaveInstallmentGroup: upsertInstallmentGroup,
     onReplaceWithInstallments: replaceWithInstallments,
     onDelete: deleteExpense,
@@ -12861,6 +14986,7 @@ function App() {
     onClose: closeModal
   }), modal?.type === "income" && /*#__PURE__*/React.createElement(IncomeEditor, {
     data: data,
+    ym: ym,
     onAdd: () => setModal({
       type: "incomeSource"
     }),
@@ -12875,30 +15001,128 @@ function App() {
   }), modal?.type === "incomeSource" && /*#__PURE__*/React.createElement(IncomeSourceForm, {
     editing: modal.editing,
     ym: ym,
-    onSave: src => {
+    onSave: (src, scope) => {
       const prev = data;
       const isEdit = (data.incomeSources || []).some(x => x.id === src.id);
-      setData(d => ({
-        ...d,
-        incomeSources: isEdit ? (d.incomeSources || []).map(x => x.id === src.id ? src : x) : [src, ...(d.incomeSources || [])]
-      }));
+      if (isEdit && scope === "month" && ym) {
+        // עריכת פרטים לחודש המוצג בלבד — override חודשי, לא נוגע בחודשים אחרים ולא מבטל השבתה
+        setData(d => ({
+          ...d,
+          incomeSources: (d.incomeSources || []).map(x => {
+            if (x.id !== src.id) return x;
+            const overrides = {
+              ...(x.monthEdits || {})
+            };
+            overrides[ym] = {
+              name: src.name,
+              emoji: src.emoji,
+              amount: src.amount,
+              date: src.date,
+              note: src.note
+            };
+            return {
+              ...x,
+              monthEdits: overrides
+            };
+          })
+        }));
+      } else if (isEdit && scope === "future" && ym) {
+        // עריכה מהחודש המוצג והלאה — מעדכן את הרכיב, ומנקה overrides חודשיים מהחודש והלאה
+        setData(d => ({
+          ...d,
+          incomeSources: (d.incomeSources || []).map(x => {
+            if (x.id !== src.id) return x;
+            const overrides = {
+              ...(x.monthEdits || {})
+            };
+            Object.keys(overrides).forEach(k => {
+              if (k >= ym) delete overrides[k];
+            });
+            return {
+              ...src,
+              skipMonths: x.skipMonths,
+              monthEdits: overrides,
+              startYm: x.startYm || src.startYm
+            };
+          })
+        }));
+      } else {
+        setData(d => ({
+          ...d,
+          incomeSources: isEdit ? (d.incomeSources || []).map(x => x.id === src.id ? src : x) : [src, ...(d.incomeSources || [])]
+        }));
+      }
       setModal({
         type: "income",
         back: "finProfile"
       });
-      showToast(isEdit ? "רכיב ההכנסה עודכן" : `נוסף רכיב הכנסה · ${shekel(src.amount)}`, () => setData(prev));
+      showToast(isEdit ? scope === "month" ? `ההכנסה עודכנה ל${monthNameOf(ym)}` : "רכיב ההכנסה עודכן" : `נוסף רכיב הכנסה · ${shekel(src.amount)}`, () => setData(prev));
     },
-    onDelete: id => {
+    onReactivate: (id, scope, atYm) => {
       const prev = data;
+      const wYm = atYm || ym;
       setData(d => ({
         ...d,
-        incomeSources: (d.incomeSources || []).filter(x => x.id !== id)
+        incomeSources: (d.incomeSources || []).map(x => {
+          if (x.id !== id) return x;
+          if (scope === "future") {
+            // הסרת כל דילוגי המחיקה מהחודש והלאה + ביטול endYm אם חוסם מכאן
+            const skip = (x.skipMonths || []).filter(k => k < wYm);
+            const out = {
+              ...x,
+              skipMonths: skip
+            };
+            if (x.endYm && x.endYm > wYm === false && ymIndex(x.endYm) <= ymIndex(wYm)) {} // keep
+            if (x.endYm && ymIndex(x.endYm) > ymIndex(wYm)) {} // future endYm stays
+            if (x.endYm && ymIndex(x.endYm) <= ymIndex(wYm)) delete out.endYm;
+            return out;
+          }
+          // רק החודש המוצג — הסרת אותו חודש מרשימת הדילוג
+          return {
+            ...x,
+            skipMonths: (x.skipMonths || []).filter(k => k !== wYm)
+          };
+        })
       }));
       setModal({
         type: "income",
         back: "finProfile"
       });
-      showToast("רכיב ההכנסה נמחק", () => setData(prev));
+      showToast(scope === "future" ? `ההכנסה הוחזרה מ${monthNameOf(wYm)} והלאה` : `ההכנסה הוחזרה ל${monthNameOf(wYm)}`, () => setData(prev));
+    },
+    onDelete: (id, scope, atYm) => {
+      const prev = data;
+      const wYm = atYm || ym;
+      if (scope === "onward") {
+        // מחיקה מהחודש המוצג והלאה — לא נוגע בחודשים קודמים (endYm חוסם מ-wYm)
+        setData(d => ({
+          ...d,
+          incomeSources: (d.incomeSources || []).map(x => x.id === id ? {
+            ...x,
+            endYm: wYm
+          } : x)
+        }));
+      } else if (scope === "month") {
+        // מחיקה מהחודש המוצג בלבד — חריגה חודשית (skipMonths), שאר החודשים נשמרים
+        setData(d => ({
+          ...d,
+          incomeSources: (d.incomeSources || []).map(x => x.id === id ? {
+            ...x,
+            skipMonths: Array.from(new Set([...(x.skipMonths || []), wYm]))
+          } : x)
+        }));
+      } else {
+        // חד־פעמי או "לצמיתות" ללא היסטוריה — הסרה מלאה
+        setData(d => ({
+          ...d,
+          incomeSources: (d.incomeSources || []).filter(x => x.id !== id)
+        }));
+      }
+      setModal({
+        type: "income",
+        back: "finProfile"
+      });
+      showToast(scope === "month" ? `ההכנסה הוסרה מ${monthNameOf(wYm)}` : scope === "onward" ? `ההכנסה תיפסק מ${monthNameOf(wYm)}` : "רכיב ההכנסה נמחק", () => setData(prev));
     },
     onBack: () => setModal({
       type: "income",
@@ -12909,23 +15133,44 @@ function App() {
       back: "finProfile"
     })
   }), modal?.type === "goal" && /*#__PURE__*/React.createElement(GoalSheet, {
-    goal: data.savingsGoal,
+    goal: goalFor(data, ym),
     projected: calc.projected,
     income: calc.income,
+    ym: ym,
+    hasMonthGoal: !!(data.savingsGoalByMonth && data.savingsGoalByMonth[ym] != null && data.savingsGoalByMonth[ym] !== ""),
     onBack: modal.back ? () => setModal({
       type: modal.back
     }) : undefined,
     onClose: closeModal,
-    onSave: v => {
+    onSave: (v, scope) => {
       const prev = data;
-      setData(d => ({
-        ...d,
-        savingsGoal: v
-      }));
+      if (scope === "month") {
+        // יעד לחודש המוצג בלבד — override תוספתי, לא נוגע בברירת המחדל
+        setData(d => ({
+          ...d,
+          savingsGoalByMonth: {
+            ...(d.savingsGoalByMonth || {}),
+            [ym]: v
+          }
+        }));
+      } else {
+        // כל חודש → מעדכן את ברירת המחדל ומסיר override קיים לחודש זה (אם היה)
+        setData(d => {
+          const map = {
+            ...(d.savingsGoalByMonth || {})
+          };
+          delete map[ym];
+          return {
+            ...d,
+            savingsGoal: v,
+            savingsGoalByMonth: map
+          };
+        });
+      }
       modal.back ? setModal({
         type: modal.back
       }) : closeModal();
-      showToast(`יעד החיסכון עודכן ל־${shekel(v)}`, () => setData(prev));
+      showToast(scope === "month" ? `יעד החיסכון ל${monthNameOf(ym)} עודכן ל־${shekel(v)}` : `יעד החיסכון עודכן ל־${shekel(v)}`, () => setData(prev));
     }
   }), modal?.type === "filter" && /*#__PURE__*/React.createElement(FilterSheet, {
     data: data,
@@ -13043,6 +15288,50 @@ function App() {
     onSave: upsertCat,
     onDelete: requestDeleteCat,
     onClose: closeModal
+  }), modal?.type === "redistribute" && /*#__PURE__*/React.createElement(RedistributeSheet, {
+    data: data,
+    calc: calc,
+    ym: ym,
+    onApply: applyRedistribution,
+    onClose: closeModal
+  }), modal?.type === "instLoadDetail" && /*#__PURE__*/React.createElement(InstLoadDetailSheet, {
+    data: data,
+    calc: calc,
+    ym: ym,
+    onClose: closeModal
+  }), modal?.type === "weeklyDetail" && /*#__PURE__*/React.createElement(WeeklyDetailSheet, {
+    data: data,
+    calc: calc,
+    ym: ym,
+    onRedistribute: () => setModal({
+      type: "redistribute"
+    }),
+    onClose: closeModal
+  }), modal?.type === "reserveDetail" && /*#__PURE__*/React.createElement(ReserveDetailSheet, {
+    data: data,
+    calc: calc,
+    ym: ym,
+    onClose: closeModal
+  }), modal?.type === "fixedDetail" && /*#__PURE__*/React.createElement(FixedExpensesSheet, {
+    calc: calc,
+    ym: ym,
+    onClose: closeModal
+  }), modal?.type === "nameMerge" && /*#__PURE__*/React.createElement(NameMergeSheet, {
+    data: data,
+    names: modal.names,
+    to: modal.to,
+    ym: ym,
+    onMerge: (names, to, fromYm) => {
+      mergeExpenseNames(names, to, fromYm);
+      closeModal();
+    },
+    onClose: closeModal
+  }), modal?.type === "recurExpDelete" && /*#__PURE__*/React.createElement(RecurExpenseDeleteDialog, {
+    expense: modal.expense,
+    ym: ym,
+    onMonth: () => recurExpDelete(modal.expense.id, "month"),
+    onOnward: () => recurExpDelete(modal.expense.id, "onward"),
+    onCancel: closeModal
   }), modal?.type === "catDelete" && /*#__PURE__*/React.createElement(CategoryDeleteDialog, {
     cat: modal.cat,
     data: data,
