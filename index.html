@@ -12509,32 +12509,21 @@ function RedistributeSheet({
     reserveColor = EMERALD;
   }
   // באנר מפרש — משלב את המדד השבועי, בשפה אחידה
+  // באנר מהות השינוי — ניסוח מאוחד (זהה למסך "כמה נשאר לשבוע")
+  const _A = redistributeAssessment(RM);
+  const _msg = getRedistributionMessage(RM, _A);
   let bannerIcon, bannerText, bannerBg, bannerColor;
-  if (pot <= 0) {
-    bannerIcon = "\u26A0\uFE0F";
-    bannerText = "כרגע אין מרווח בטוח לחיסכון — ההוצאות הידועות משתמשות בכל ההכנסה.";
+  bannerIcon = _msg.icon;
+  bannerText = _msg.text;
+  if (_msg.tone === "warn") {
     bannerBg = "rgba(245,158,11,0.10)";
     bannerColor = "#8a5a00";
-  } else if (available <= 0.5) {
-    bannerIcon = "\u26A0\uFE0F";
-    bannerText = "כל היתרה הופנתה לחיסכון ולא יישאר סכום זמין בחשבון.";
-    bannerBg = "rgba(245,158,11,0.10)";
-    bannerColor = "#8a5a00";
-  } else if (reserveMissing > 0.5) {
-    bannerIcon = "\uD83D\uDFE1";
-    bannerText = weeklyPhrase ? `יישארו רק ${weeklyPhrase} עד סוף החודש. החלוקה נמוכה מההמלצה.` : "היתרה שתישאר תהיה נמוכה מהמומלץ להשאיר ביתרה.";
-    bannerBg = "rgba(245,158,11,0.10)";
-    bannerColor = "#8a5a00";
-  } else if (overReserve > 9.5) {
-    bannerIcon = "\uD83D\uDD35";
-    bannerText = `אפשר להגדיל את החיסכון בעוד כ-${shekel(roundTo10(overReserve))} ועדיין לשמור על המומלץ להשאיר ביתרה.`;
-    bannerBg = "rgba(47,111,237,0.08)";
-    bannerColor = "#3255a0";
-  } else {
-    bannerIcon = "\uD83D\uDFE2";
-    bannerText = mState === "future" ? "זו הערכה שמרנית לפי הנתונים שהוזנו כרגע." : weeklyPhrase ? `חלוקה מאוזנת — יישארו ${weeklyPhrase} עד סוף החודש.` : "חלוקה מאוזנת — היתרה שתישאר תואמת למומלץ.";
+  } else if (_msg.tone === "positive") {
     bannerBg = "rgba(47,160,94,0.10)";
     bannerColor = "#1a7048";
+  } else {
+    bannerBg = "rgba(47,111,237,0.08)";
+    bannerColor = "#3255a0";
   }
   // כרטיס קופה — משתמש בסטייל הלבן הסטנדרטי, +/− ניטרליים (לא ירוק/אדום)
   const availLow = available < reserveTarget - 0.5;
