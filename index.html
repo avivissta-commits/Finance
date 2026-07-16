@@ -33,6 +33,7 @@
     @keyframes cardIn { from{opacity:0; transform:translateY(10px) scale(.98)} to{opacity:1; transform:none} }
     @keyframes cardInX { from{opacity:0; transform:translateX(-34px)} to{opacity:1; transform:none} }
     @keyframes staggerUp { from{opacity:0; transform:translateY(10px)} to{opacity:1; transform:translateY(0)} }
+    @keyframes tagsIn { from{opacity:0; transform:translateY(-6px)} to{opacity:1; transform:translateY(0)} }
     @keyframes ringtext { from{opacity:0; transform:translateY(-7px)} to{opacity:1; transform:translateY(0)} }
     @keyframes warnPulse { 0%,100%{transform:scale(1)} 45%{transform:scale(1.14)} 70%{transform:scale(1.02)} }
     @keyframes cardOut { from{opacity:1; transform:none} to{opacity:0; transform:translateY(6px) scale(.98)} }
@@ -6444,11 +6445,21 @@ function buildVocab(data) {
     if (!s) return;
     String(s).split(/[\s,.;:!?()\[\]"'\/\\-]+/).forEach(add);
   };
-  (data.categories || []).forEach(c => add(c.name));
-  (data.budgets || []).forEach(b => add(b.name));
+  (data.categories || []).forEach(c => {
+    add(c.name);
+    words(c.note);
+  });
+  (data.budgets || []).forEach(b => {
+    add(b.name);
+    words(b.note);
+  });
   (data.expenses || []).forEach(e => {
     add(e.name);
     words(e.note);
+  });
+  (data.incomeSources || []).forEach(i => {
+    add(i.name);
+    words(i.note);
   });
   return [...m.values()].sort((a, b) => b.n - a.n || a.text.length - b.text.length).map(x => x.text);
 }
@@ -6567,6 +6578,9 @@ function SmartField({
   inputClassName = "",
   placeholder,
   onEnter,
+  onConfirm,
+  onFocus,
+  onBlur,
   autoFocus,
   inputMode,
   ariaLabel
@@ -6576,7 +6590,9 @@ function SmartField({
   const accept = () => {
     if (!s) return;
     const v = value || "";
-    onChange(v.slice(0, v.length - s.seg.length) + s.word);
+    const full = v.slice(0, v.length - s.seg.length) + s.word;
+    onChange(full);
+    if (onConfirm) onConfirm(full); // אישור השלמה → תגית
   };
   const onKey = e => {
     if (s && e.key === "Tab") {
@@ -6588,8 +6604,9 @@ function SmartField({
       if (s) {
         e.preventDefault();
         accept();
-      } else if (onEnter) {
-        onEnter();
+      } else {
+        if (onConfirm && (value || "").trim()) onConfirm((value || "").trim()); // Enter מאשר חיפוש
+        if (onEnter) onEnter();
       }
       return;
     }
@@ -6623,6 +6640,8 @@ function SmartField({
     value: value,
     onChange: e => onChange(e.target.value),
     onKeyDown: onKey,
+    onFocus: onFocus,
+    onBlur: onBlur,
     placeholder: placeholder,
     autoFocus: autoFocus,
     inputMode: inputMode,
@@ -13333,6 +13352,43 @@ function App() {
   const [pageDir, setPageDir] = useState(0);
   const [closing, setClosing] = useState(false);
   const [filter, setFilter] = useState(defaultFilter);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [activeTag, setActiveTag] = useState(null);
+  // חיפושים אחרונים — עד 3, פר-משתמש, נשמרים בנתוני המשתמש (שדה תוסף)
+  const recentSearches = (data && data.recentSearches) || [];
+  const recordSearch = term => {
+    const t = (term || "").trim();
+    if (t.length < 1) return;
+    setActiveTag(t);
+    setData(d => {
+      const prev = (d.recentSearches || []).filter(x => x !== t);
+      return {
+        ...d,
+        recentSearches: [t, ...prev].slice(0, 3)
+      };
+    });
+  };
+  const activateTag = t => {
+    setFilter(f => ({
+      ...f,
+      query: t
+    }));
+    setActiveTag(t);
+    recordSearch(t); // מעביר לראש הרשימה
+  };
+  const deleteTag = t => {
+    setData(d => ({
+      ...d,
+      recentSearches: (d.recentSearches || []).filter(x => x !== t)
+    }));
+    if (activeTag === t) {
+      setActiveTag(null);
+      setFilter(f => ({
+        ...f,
+        query: ""
+      }));
+    }
+  };
   const [mode, setMode] = useState("projected");
   const [viewBy, setViewBy] = useState("budgets"); // "תצוגה לפי" בפירוט החודשי — נשמר בין פתיחות
   // ריפוי עצמי: אחרי שנטענו הנתונים של המשתמש, מנרמלים את הסינון שלו.
@@ -14398,11 +14454,13 @@ function App() {
       cat: o.cat
     })
   }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 mb-[18px]",
+    className: "mb-[18px]",
     style: {
       animation: "staggerUp .36s cubic-bezier(.22,.61,.36,1) both",
       animationDelay: enterBase + 180 + "ms"
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 flex items-center gap-2 rounded-2xl px-3 h-11",
     style: field
@@ -14422,10 +14480,16 @@ function App() {
     d: "m20 20-3-3"
   })), /*#__PURE__*/React.createElement(SmartField, {
     value: filter.query,
-    onChange: q => setFilter(f => ({
-      ...f,
-      query: q
-    })),
+    onChange: q => {
+      setFilter(f => ({
+        ...f,
+        query: q
+      }));
+      if (activeTag && q !== activeTag) setActiveTag(null);
+    },
+    onConfirm: term => recordSearch(term),
+    onFocus: () => setSearchFocused(true),
+    onBlur: () => setTimeout(() => setSearchFocused(false), 180),
     vocab: vocab,
     mode: "word",
     placeholder: "חיפוש תקציב או הוצאה",
@@ -14433,10 +14497,13 @@ function App() {
     wrapClassName: "flex-1 min-w-0",
     inputClassName: "min-w-0 text-[14px] text-stone-700 placeholder:text-stone-400"
   }), filter.query && /*#__PURE__*/React.createElement("button", {
-    onClick: () => setFilter(f => ({
-      ...f,
-      query: ""
-    })),
+    onClick: () => {
+      setFilter(f => ({
+        ...f,
+        query: ""
+      }));
+      setActiveTag(null);
+    },
     "aria-label": "נקה",
     className: "shrink-0 grid place-items-center rounded-full",
     style: {
@@ -14486,6 +14553,64 @@ function App() {
       background: GREEN,
       border: "2px solid #eef1f7"
     }
+  }))), searchFocused && recentSearches.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-1.5 mt-2 px-0.5",
+    style: {
+      animation: "tagsIn .2s ease both"
+    }
+  }, recentSearches.slice(0, 4).map(t => {
+    const isActive = activeTag === t;
+    return /*#__PURE__*/React.createElement("span", {
+      key: t,
+      role: "button",
+      tabIndex: 0,
+      "aria-pressed": isActive,
+      "aria-label": (isActive ? "בטל חיפוש " : "חפש ") + t,
+      onMouseDown: e => e.preventDefault(),
+      onClick: () => isActive ? (setActiveTag(null), setFilter(f => ({
+        ...f,
+        query: ""
+      }))) : activateTag(t),
+      className: "inline-flex items-center rounded-full cursor-pointer select-none transition-all",
+      style: {
+        gap: 6,
+        paddingInlineStart: 8,
+        paddingInlineEnd: 11,
+        height: 26,
+        fontSize: 12.5,
+        fontWeight: 600,
+        background: isActive ? GREEN : "#e8f0fe",
+        color: isActive ? "#fff" : GREEN,
+        transform: "scale(1)",
+        transition: "background .16s ease, color .16s ease, transform .16s ease"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      role: "button",
+      tabIndex: 0,
+      "aria-label": "מחק את " + t + " מהחיפושים האחרונים",
+      onMouseDown: e => e.preventDefault(),
+      onClick: e => {
+        e.stopPropagation();
+        deleteTag(t);
+      },
+      className: "grid place-items-center rounded-full shrink-0",
+      style: {
+        width: 16,
+        height: 16,
+        marginInlineStart: -1,
+        opacity: 0.85
+      }
+    }, /*#__PURE__*/React.createElement("svg", {
+      width: "9",
+      height: "9",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: isActive ? "#fff" : GREEN,
+      strokeWidth: "3",
+      strokeLinecap: "round"
+    }, /*#__PURE__*/React.createElement("path", {
+      d: "M18 6 6 18M6 6l12 12"
+    }))), /*#__PURE__*/React.createElement("span", null, t));
   }))), !filter.cat && /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between px-1 mb-3"
   }, /*#__PURE__*/React.createElement(SortDropdown, {
@@ -14569,7 +14694,10 @@ function App() {
   }, (() => {
     const q = filter.query.trim();
     const mn = s => !q || (s || "").indexOf(q) !== -1;
-    const budContains = b => !!q && (data.expenses || []).some(e => e.budgetId === b.id && mn(e.name));
+    // התאמה כוללת גם את ההערה (note) של תקציב/הוצאה
+    const mnB = b => !q || mn(b.name) || (b.note || "").indexOf(q) !== -1;
+    const mnE = e => !q || mn(e.name) || (e.note || "").indexOf(q) !== -1;
+    const budContains = b => !!q && (data.expenses || []).some(e => e.budgetId === b.id && (mn(e.name) || (e.note || "").indexOf(q) !== -1));
     const groups = data.categories.map(cat => {
       let buds = calc.budgets.filter(b => b.catId === cat.id);
       let unb = calc.active.filter(e => !e.budgetId && expCatId(e, calc.budgets) === cat.id);
@@ -14634,10 +14762,10 @@ function App() {
         }
       }
       if (q && !mn(cat.name)) {
-        varB = varB.filter(b => mn(b.name) || budContains(b));
-        fixedB = fixedB.filter(b => mn(b.name));
-        recUnb = recUnb.filter(e => mn(e.name));
-        plainUnb = plainUnb.filter(e => mn(e.name));
+        varB = varB.filter(b => mnB(b) || budContains(b));
+        fixedB = fixedB.filter(b => mnB(b));
+        recUnb = recUnb.filter(e => mnE(e));
+        plainUnb = plainUnb.filter(e => mnE(e));
       }
       return {
         cat,
