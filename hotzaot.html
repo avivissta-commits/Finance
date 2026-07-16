@@ -1758,7 +1758,11 @@ function redistributeAssessment(RM) {
   const toleranceFloor = Math.max(80, RM.proposedSavings * 0.10);
   const belowMinimum = cur < minB;
   let state, hasProposal;
-  if (belowMinimum && RM.currentEffectiveSavings > 0) {
+  if (RM.recommendationType === "pause_savings" && RM.curGoal > 0.5) {
+    // 🛡️ החודש לחוץ מדי — הצעה לוותר על החיסכון לחודש זה (קודם לכל)
+    state = "pause";
+    hasProposal = true;
+  } else if (belowMinimum && RM.currentEffectiveSavings > 0) {
     // 🔴 קריטי — היתרה נמוכה מהמינימום, יש חיסכון שאפשר להפחית
     state = "critical";
     hasProposal = true;
@@ -1769,6 +1773,10 @@ function redistributeAssessment(RM) {
   } else if (cur > prefB * 1.15 && RM.recommendationType === "increase" && proposedDelta >= toleranceFloor) {
     // 🔵 אפשר לחסוך יותר — יתרה גבוהה משמעותית
     state = "canSaveMore";
+    hasProposal = true;
+  } else if (RM.recommendationType === "pause_savings" && RM.curGoal > 0.5) {
+    // 🛡️ החודש לחוץ מדי — הצעה לוותר על החיסכון לחודש זה
+    state = "pause";
     hasProposal = true;
   } else if (RM.recommendationType === "reduce" && proposedDelta >= toleranceFloor) {
     // 🟡 אפשר לשפר — הפחתת חיסכון תשפר נזילות
@@ -1811,20 +1819,22 @@ function getRedistributionMessage(RM, A) {
       text: "היתרה הנוכחית נמוכה ביחס לזמן שנותר — הפחתת החיסכון תגדיל את הסכום הזמין לכל שבוע."
     };
   }
-  // הפחתה עד 0 — ביטול יעד לחודש זה
-  if (RM.recommendationType === "reduce" && proposed <= 0.5) {
+  // pause_savings — החודש לחוץ מדי, עדיף לוותר על החיסכון (החלטה אחראית לחודש נקודתי)
+  if (RM.recommendationType === "pause_savings") {
+    // מצב קריטי יותר: גם ללא חיסכון היתרה מצומצמת
+    const tight = RM.availableBeforeSavings <= RM.minimumRecommendedBalance;
     return {
       icon: "\uD83D\uDEE1\uFE0F",
       tone: "neutral",
-      text: "החודש עדיף לוותר על יעד החיסכון ולהשאיר את מלוא היתרה זמינה."
+      text: tight ? "גם ללא חיסכון החודש היתרה צפויה להיות מצומצמת. מומלץ להשאיר את מלוא הסכום זמין בחודש הזה." : "החודש עדיף לתת עדיפות ליתרה ולא להציב יעד חיסכון. הסכום שנותר נמוך ביחס לזמן שנותר בחודש."
     };
   }
-  // הפחתה חלקית
+  // הפחתה חלקית — יש עדיין חיסכון בטוח, מפחיתים אליו (לא מאפסים)
   if (RM.recommendationType === "reduce") {
     return {
       icon: "\uD83D\uDD3D",
       tone: "neutral",
-      text: "השינוי יפחית את יעד החיסכון כדי להשאיר יותר כסף זמין להמשך החודש."
+      text: `כדי לשמור על יתרה מספקת, מומלץ להפחית את יעד החיסכון ל-${shekel(RM.proposedSavings)} בחודש הזה.`
     };
   }
   // אין יעד קיים — יצירת יעד
@@ -1847,6 +1857,98 @@ function getRedistributionMessage(RM, A) {
     icon: "\u2696\uFE0F",
     tone: "neutral",
     text: "אפשר להתאים את החלוקה לזמן שנותר בחודש."
+  };
+}
+// ===== מסר חי במצב התאמה ידנית — נגזר ממצב הסימולציה הנוכחי, לא מההצעה =====
+// available = מה שיישאר ביתרה כרגע, min/pref = גבולות הרזרבה, prevGoal = היעד המקורי
+function simulationMessage(available, savings, RM) {
+  const min = RM.minimumRecommendedBalance;
+  const pref = RM.preferredRecommendedBalance;
+  const round10 = RM.round10;
+  const balancedLower = min;
+  const balancedUpper = pref * 1.15;
+  // כמה מהיתרה אפשר להפנות לחיסכון תוך שמירה על הטווח המאוזן
+  const roomForSavings = Math.max(0, available - pref);
+  // סף משמעות — לא להציק על פערים זעירים
+  const significance = Math.max(80, RM.income * 0.03);
+  // ===== APPROVED ZONE — האם המשתמש נמצא בחלוקה שהמערכת עצמה ממליצה עליה? =====
+  // מודדים מול החלוקה האופטימלית האפשרית, לא מול סטנדרט אבסולוטי.
+  // אם המשתמש בטווח ±max(50, 10%) מ-proposedSavings — זה מצב תקין ומאושר.
+  const approvedTolerance = Math.max(50, RM.proposedSavings * 0.10);
+  const atOptimal = Math.abs(savings - RM.proposedSavings) <= approvedTolerance;
+  if (atOptimal && available > 0.5) {
+    // המשתמש הגיע לחלוקה הטובה ביותר האפשרית עבורו — אישור, לא אזהרה
+    if (RM.proposedSavings <= 0.5) {
+      // המלצת המערכת עצמה היא 0 (חודש לחוץ) — מאשרים את זה כהחלטה נכונה
+      return {
+        icon: "\u2713",
+        tone: "positive",
+        text: "החלוקה שבחרת מתאימה לחודש הזה — עדיף להשאיר את היתרה זמינה."
+      };
+    }
+    return {
+      icon: "\u2713",
+      tone: "positive",
+      text: "נראה שהגעת לחלוקה טובה לחודש הזה — מרווח ביטחון וגם חיסכון."
+    };
+  }
+  // ===== מחוץ לטווח המאושר: סיווג לפי מצב כלכלי =====
+  // 0 הוא ערך קצה של הסליידר, לא קטגוריה פיננסית.
+
+  // 🔴 קריטי — היתרה נמוכה משמעותית מהרף (כולל יתרה 0 כשהרף חיובי)
+  if (available < min * 0.7) {
+    return {
+      icon: "\uD83D\uDD34",
+      tone: "critical",
+      text: min > 0 ? "לא נשארת יתרה זמינה מספקת להמשך החודש. מומלץ להפחית את יעד החיסכון." : "לא נשארת יתרה מספקת לזמן שנותר בחודש. מומלץ להקטין משמעותית את יעד החיסכון."
+    };
+  }
+  // 🟠 מתחת לרף המינימלי
+  if (available < balancedLower) {
+    return {
+      icon: "\uD83D\uDFE0",
+      tone: "warn",
+      text: "היתרה נמוכה מהרף המומלץ לזמן שנותר בחודש. כדאי להפחית את יעד החיסכון."
+    };
+  }
+  // 🟡 קרוב לרף — בטווח המאוזן אך קרוב לתחתית
+  if (available < min * 1.10) {
+    return {
+      icon: "\uD83D\uDFE1",
+      tone: "caution",
+      text: "היתרה קרובה לרף המומלץ. הגדלת החיסכון נוספת עלולה לצמצם את מרווח הביטחון."
+    };
+  }
+  // 🟢 מאוזן — בטווח המומלץ. מפרגן על המצב.
+  if (available >= balancedLower && available <= balancedUpper) {
+    return {
+      icon: "\u2713",
+      tone: "positive",
+      text: "החלוקה שבחרת מאוזנת ומתאימה לזמן שנותר בחודש."
+    };
+  }
+  // ===== מכאן: יתרה גבוהה משמעותית מהטווח המועדף (available > balancedUpper) =====
+  // אם החיסכון 0 אך יש מקום אמיתי לחיסכון — לא לומר "עדיף לוותר"!
+  if (savings <= 0.5) {
+    if (roomForSavings >= significance) {
+      return {
+        icon: "\uD83D\uDCB0",
+        tone: "info",
+        text: `כרגע כל הסכום נשאר ביתרה, אך לפי הנתונים ניתן להפנות עד ${shekel(round10(roomForSavings))} לחיסכון ועדיין לשמור על חלוקה מאוזנת.`
+      };
+    }
+    // חיסכון 0 וגם אין מקום בטוח לחיסכון — כאן באמת עדיף להשאיר הכל ביתרה
+    return {
+      icon: "\uD83D\uDFE1",
+      tone: "warn",
+      text: "החודש עדיף להשאיר את מלוא היתרה זמינה ולא להציב יעד חיסכון."
+    };
+  }
+  // 🔵 יתרה גבוהה, יש חיסכון — אפשר להגדיל אם רוצים
+  return {
+    icon: "\uD83D\uDCB0",
+    tone: "info",
+    text: "נשארת יתרה גבוהה ביחס לזמן שנותר. ניתן להגדיל את יעד החיסכון אם תרצה."
   };
 }
 
@@ -1887,12 +1989,18 @@ function reserveModel(calc, ym, data) {
   const maximumSafeSavings = Math.max(0, availableBeforeSavings - minimumRecommendedBalance);
   const recommendedSavingsRaw = Math.max(0, availableBeforeSavings - preferredRecommendedBalance);
   const curGoal = goalFor(data, ym);
-  // המלצה סימטרית
+  // סף משמעות לחיסכון — מתחתיו חיסכון לא שווה טרחה
+  const savingsSignificance = Math.max(80, income * 0.03);
+  // ===== המלצה סימטרית עם שלוש רמות (טוב / חלקי / אין מרווח) =====
   let proposedSavings, recommendationType;
-  if (availableBeforeSavings <= minimumRecommendedBalance) {
+  // pause_savings רק כשאין מרווח בטוח משמעותי לחיסכון:
+  // אין מספיק יתרה כדי גם לשמור מינימום וגם לחסוך סכום משמעותי.
+  const noSafeRoom = availableBeforeSavings <= minimumRecommendedBalance || maximumSafeSavings <= savingsSignificance;
+  if (noSafeRoom) {
     proposedSavings = 0;
-    recommendationType = "hold"; // אין מרווח בטוח
+    recommendationType = "pause_savings";
   } else if (curGoal > maximumSafeSavings) {
+    // יש מרווח חלקי — להפחית לסכום הבטוח, לא לאפס
     proposedSavings = maximumSafeSavings;
     recommendationType = "reduce";
   } else if (curGoal < recommendedSavingsRaw) {
@@ -1902,7 +2010,7 @@ function reserveModel(calc, ym, data) {
     proposedSavings = curGoal;
     recommendationType = "keep";
   }
-  // הגבלת שינוי אגרסיבי — שינוי הדרגתי
+  // הגבלת שינוי אגרסיבי — שינוי הדרגתי (לא חל על pause_savings)
   const maxSuggestedChange = Math.min(availableBeforeSavings * 0.25, income * 0.10);
   if (recommendationType === "increase" || recommendationType === "reduce") {
     const delta = proposedSavings - curGoal;
@@ -10602,13 +10710,13 @@ function FilterSheet({
     label: "הכל"
   }, {
     k: "variable",
-    label: "מתוקצבים"
+    label: "תקציבי מעקב"
   }, {
     k: "unbudgeted",
-    label: "לא מתוקצבים"
+    label: "לא מתוקצב"
   }, {
     k: "fixed",
-    label: "הוצאות קבועות"
+    label: "קבוע"
   }, {
     k: "installments",
     label: "תשלומים"
@@ -12412,7 +12520,7 @@ function WeeklyDetailSheet({
     }, /*#__PURE__*/React.createElement("span", {
       className: "text-[15px] leading-none mt-0.5 shrink-0"
     }, msg.icon), /*#__PURE__*/React.createElement("span", {
-      className: "text-[13px] font-semibold leading-relaxed",
+      className: "text-[12px] font-semibold leading-relaxed",
       style: {
         color: toneColor
       }
@@ -12472,14 +12580,55 @@ function RedistributeSheet({
   const [editSide, setEditSide] = useState(null); // 'save' | 'avail' — איזה כרטיס בעריכת מספר
   const [draft, setDraft] = useState("");
   const [whyOpen, setWhyOpen] = useState(false);
+  // מסר חי במצב עריכה — עם debounce לתחושה שהמערכת "חושבת"
+  const [liveMsg, setLiveMsg] = useState(null);
+  const [msgFade, setMsgFade] = useState(false);
+  // לחיצה רציפה על +/− — pointer events, עובד במובייל ובדסקטופ
+  const holdRef = React.useRef({
+    t1: null,
+    t2: null
+  });
+  const stopHold = () => {
+    const h = holdRef.current;
+    if (h.t1) {
+      clearTimeout(h.t1);
+      h.t1 = null;
+    }
+    if (h.t2) {
+      clearInterval(h.t2);
+      h.t2 = null;
+    }
+    h.ticked = false;
+  };
+  const startHold = (fn, canContinue) => e => {
+    if (e && e.pointerType && e.button > 0) return; // רק לחיצה ראשית
+    fn(); // צעד ראשון מיידי
+    stopHold();
+    let last = savingsRef.current;
+    holdRef.current.t1 = setTimeout(() => {
+      holdRef.current.t2 = setInterval(() => {
+        // אם מאז הטיק הקודם הערך לא זז (הגענו לגבול) — לעצור
+        if (savingsRef.current === last && holdRef.current.ticked) {
+          stopHold();
+          return;
+        }
+        last = savingsRef.current;
+        holdRef.current.ticked = true;
+        fn();
+      }, 170);
+    }, 450);
+  };
+  React.useEffect(() => stopHold, []);
+  const savingsRef = React.useRef(savings);
+  savingsRef.current = savings;
   const available = Math.max(0, pot - savings);
   const overReserve = Math.max(0, available - reserveTarget);
   const reserveMissing = Math.max(0, reserveTarget - available);
   const savePct = pot > 0 ? Math.round(savings / pot * 100) : 0;
   const availPct = pot > 0 ? 100 - savePct : 0;
   const setSave = v => setSavings(Math.max(0, Math.min(pot, Math.round(v))));
-  const bumpSave = d => setSave(savings + d);
-  const bumpAvail = d => setSave(savings - d);
+  const bumpSave = d => setSavings(cur => Math.max(0, Math.min(pot, Math.round(cur + d))));
+  const bumpAvail = d => setSavings(cur => Math.max(0, Math.min(pot, Math.round(cur - d))));
   // מדד שבועי חי — נגזר ממה שיישאר ביתרה (available), לא מהרזרבה הקבועה
   const remWeeks = RM.remainingWeeks;
   const remDays = RM.remainingDays;
@@ -12495,10 +12644,14 @@ function RedistributeSheet({
   const weeklyPhrase = underWeek && perDayLive != null ? `כ-${shekel(perDayLive)} ליום` : perWeekLive != null ? `כ-${shekel(perWeekLive)} לשבוע` : null;
   // מצב שורת "מומלץ להשאיר ביתרה"
   let reserveState, reserveColor;
-  if (available <= 0.5) {
+  const _atOptimalRS = Math.abs(savings - RM.proposedSavings) <= Math.max(50, RM.proposedSavings * 0.10);
+  if (_atOptimalRS && available > 0.5) {
+    reserveState = "תואם להמלצה";
+    reserveColor = EMERALD;
+  } else if (available <= 0.5) {
     reserveState = "לא יישאר ביתרה";
     reserveColor = AMBER;
-  } else if (reserveMissing > 0.5) {
+  } else if (roundTo10(reserveMissing) >= 10) {
     reserveState = `חסרים כ-${shekel(roundTo10(reserveMissing))}`;
     reserveColor = AMBER;
   } else if (overReserve > 9.5) {
@@ -12512,6 +12665,37 @@ function RedistributeSheet({
   // באנר מהות השינוי — ניסוח מאוחד (זהה למסך "כמה נשאר לשבוע")
   const _A = redistributeAssessment(RM);
   const _msg = getRedistributionMessage(RM, _A);
+  // debounce: כשמשתמש עורך ידנית, המסר מתעדכן ~700ms אחרי השינוי האחרון, עם fade
+  React.useEffect(() => {
+    if (!manual) {
+      setLiveMsg(null);
+      return;
+    }
+    setMsgFade(true); // דהייה החוצה
+    const t = setTimeout(() => {
+      setLiveMsg(simulationMessage(available, savings, RM));
+      setMsgFade(false); // כניסה פנימה
+    }, 700);
+    return () => clearTimeout(t);
+  }, [savings, manual, available]);
+  // המסר שיוצג: במצב עריכה — החי (או ההצעה עד שהחישוב מוכן); אחרת — ההצעה
+  const shownMsg = manual ? liveMsg || _msg : _msg;
+  const toneToStyle = tone => tone === "critical" ? {
+    bg: "rgba(180,35,24,0.10)",
+    color: "#8a1c14"
+  } : tone === "warn" ? {
+    bg: "rgba(234,120,20,0.12)",
+    color: "#9a4a06"
+  } : tone === "caution" ? {
+    bg: "rgba(245,158,11,0.12)",
+    color: "#8a5a00"
+  } : tone === "positive" ? {
+    bg: "rgba(47,160,94,0.10)",
+    color: "#1a7048"
+  } : {
+    bg: "rgba(47,111,237,0.08)",
+    color: "#3255a0"
+  };
   let bannerIcon, bannerText, bannerBg, bannerColor;
   bannerIcon = _msg.icon;
   bannerText = _msg.text;
@@ -12539,23 +12723,29 @@ function RedistributeSheet({
     style: field
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2 mb-2"
-  }, /*#__PURE__*/React.createElement("span", null, dot), /*#__PURE__*/React.createElement("span", {
-    className: "text-[13.5px] font-semibold",
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[16px]"
+  }, dot), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13.5px] font-bold",
     style: {
-      color: INK
+      color: side === "save" ? GREEN : EMERALD
     }
   }, label)), manual ? /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: onMinus,
+    onPointerDown: minusDis ? undefined : startHold(onMinus, () => true),
+    onPointerUp: stopHold,
+    onPointerCancel: stopHold,
+    onPointerLeave: stopHold,
     disabled: minusDis,
-    className: "grid place-items-center rounded-xl shrink-0 text-[20px] font-bold transition-transform active:scale-90",
+    className: "grid place-items-center rounded-xl shrink-0 text-[20px] font-bold transition-transform active:scale-90 select-none",
     style: {
       width: 42,
       height: 42,
       background: "#fff",
       border: "1px solid rgba(122,134,158,0.28)",
-      color: minusDis ? "#c7ccda" : INK
+      color: minusDis ? "#c7ccda" : INK,
+      touchAction: "none"
     }
   }, "\u2212"), editSide === side ? /*#__PURE__*/React.createElement("input", {
     autoFocus: true,
@@ -12585,15 +12775,19 @@ function RedistributeSheet({
       lineHeight: 1.4
     }
   }, shekel(val)), /*#__PURE__*/React.createElement("button", {
-    onClick: onPlus,
+    onPointerDown: plusDis ? undefined : startHold(onPlus, () => true),
+    onPointerUp: stopHold,
+    onPointerCancel: stopHold,
+    onPointerLeave: stopHold,
     disabled: plusDis,
-    className: "grid place-items-center rounded-xl shrink-0 text-[20px] font-bold transition-transform active:scale-90",
+    className: "grid place-items-center rounded-xl shrink-0 text-[20px] font-bold transition-transform active:scale-90 select-none",
     style: {
       width: 42,
       height: 42,
       background: "#fff",
       border: "1px solid rgba(122,134,158,0.28)",
-      color: plusDis ? "#c7ccda" : INK
+      color: plusDis ? "#c7ccda" : INK,
+      touchAction: "none"
     }
   }, "+")) : /*#__PURE__*/React.createElement("div", {
     className: "text-center font-extrabold text-[22px] tabular-nums",
@@ -12651,25 +12845,20 @@ function RedistributeSheet({
       color: Math.round(prop) !== Math.round(cur) ? col : INK
     }
   }, shekel(prop)))) ),
-  // משפט השפעה — מדבר על המשמעות, לא חוזר על הטבלה
-  Math.round(savings) !== Math.round(curSavings) && /*#__PURE__*/React.createElement("div", {
-    className: "text-[12px] leading-relaxed text-stone-500 text-center mb-3 px-2"
-  }, (() => {
-    const gd = curSavings - savings;
-    const wd = perWeekLive != null && curPerWeekRef != null ? perWeekLive - curPerWeekRef : 0;
-    if (gd > 0 && wd > 0) return `הפחתת יעד החיסכון ב-${shekel(roundTo10(gd))} תוסיף כ-${shekel(roundTo10(wd))} לכל שבוע שנותר.`;
-    if (gd > 0) return `הפחתת יעד החיסכון ב-${shekel(roundTo10(gd))} תגדיל את היתרה הצפויה באותו סכום.`;
-    if (gd < 0) return `הגדלת יעד החיסכון ב-${shekel(roundTo10(-gd))} תקטין את היתרה הזמינה באותו סכום.`;
-    return "";
-  })()),
-  // ג. באנר תובנה
-  /*#__PURE__*/React.createElement("div", {
-    className: "rounded-2xl px-3.5 py-2.5 mb-3 text-[12.5px] leading-relaxed text-center font-medium",
-    style: {
-      background: bannerBg,
-      color: bannerColor
-    }
-  }, bannerIcon + " " + bannerText),
+  // ג. באנר מהות/הכוונה — דינמי במצב עריכה, עם fade+slide
+  (() => {
+    const st = toneToStyle(shownMsg.tone);
+    return /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl px-3.5 py-2.5 mb-3 text-[11.5px] leading-relaxed text-center font-medium",
+      style: {
+        background: st.bg,
+        color: st.color,
+        opacity: msgFade ? 0 : 1,
+        transform: msgFade ? "translateY(4px)" : "translateY(0)",
+        transition: "opacity .28s ease, transform .28s ease, background .28s ease, color .28s ease"
+      }
+    }, shownMsg.icon + " " + shownMsg.text);
+  })(),
   // ד. פס החלוקה
   /*#__PURE__*/React.createElement("div", {
     className: "mb-1"
@@ -12708,9 +12897,9 @@ function RedistributeSheet({
     open: manual
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-2 mb-2"
-  }, PotCard("save", "\uD83D\uDD35", "לחיסכון", savings, () => bumpSave(-step), () => bumpSave(step), savings <= 0, savings >= pot, INK), PotCard("avail", "\uD83D\uDFE9", "יישאר ביתרה", available, () => bumpAvail(-step), () => bumpAvail(step), available <= 0, available >= pot, availLow ? AMBER : INK))),
-  // ו. שורת הרזרבה המומלצת
-  /*#__PURE__*/React.createElement("div", {
+  }, PotCard("save", "\uD83D\uDC37", "לחיסכון", savings, () => bumpSave(-step), () => bumpSave(step), savings <= 0, savings >= pot, INK), PotCard("avail", "\uD83D\uDCB5", "יישאר ביתרה", available, () => bumpAvail(-step), () => bumpAvail(step), available <= 0, available >= pot, availLow ? AMBER : INK))),
+  // ו. שורת הרזרבה המומלצת — אינדיקציית בטיחות, רק במצב התאמה ידנית
+  manual && /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between px-1 mb-3 text-[12px]"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-stone-400"
