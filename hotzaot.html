@@ -34,6 +34,8 @@
     @keyframes cardInX { from{opacity:0; transform:translateX(-34px)} to{opacity:1; transform:none} }
     @keyframes staggerUp { from{opacity:0; transform:translateY(10px)} to{opacity:1; transform:translateY(0)} }
     @keyframes tagsIn { from{opacity:0; transform:translateY(-6px)} to{opacity:1; transform:translateY(0)} }
+    @keyframes searchChipIn { from{opacity:0; transform:translateY(-4px) scale(.9)} to{opacity:1; transform:translateY(0) scale(1)} }
+    @keyframes searchChipRemove { from{opacity:1; transform:translateY(0) scale(1)} to{opacity:0; transform:translateY(-6px) scale(.85)} }
     @keyframes ringtext { from{opacity:0; transform:translateY(-7px)} to{opacity:1; transform:translateY(0)} }
     @keyframes warnPulse { 0%,100%{transform:scale(1)} 45%{transform:scale(1.14)} 70%{transform:scale(1.02)} }
     @keyframes cardOut { from{opacity:1; transform:none} to{opacity:0; transform:translateY(6px) scale(.98)} }
@@ -13376,18 +13378,38 @@ function App() {
     setActiveTag(t);
     recordSearch(t); // מעביר לראש הרשימה
   };
+  const [removingTag, setRemovingTag] = useState(null);
   const deleteTag = t => {
-    setData(d => ({
-      ...d,
-      recentSearches: (d.recentSearches || []).filter(x => x !== t)
-    }));
-    if (activeTag === t) {
-      setActiveTag(null);
-      setFilter(f => ({
-        ...f,
-        query: ""
+    const list = (data.recentSearches || []);
+    const originalIndex = list.indexOf(t);
+    // אנימציית מחיקה: מסמנים removing, ואחרי 180ms מסירים בפועל
+    setRemovingTag(t);
+    setTimeout(() => {
+      setData(d => ({
+        ...d,
+        recentSearches: (d.recentSearches || []).filter(x => x !== t)
       }));
-    }
+      setRemovingTag(null);
+      if (activeTag === t) {
+        setActiveTag(null);
+        setFilter(f => ({
+          ...f,
+          query: ""
+        }));
+      }
+      // Toast עם ביטול — משתמש במנגנון הקיים
+      showToast(`החיפוש "${t}" נמחק`, () => {
+        setData(d => {
+          const cur = (d.recentSearches || []).filter(x => x !== t);
+          const idx = Math.min(originalIndex < 0 ? cur.length : originalIndex, cur.length);
+          const restored = [...cur.slice(0, idx), t, ...cur.slice(idx)].slice(0, 3);
+          return {
+            ...d,
+            recentSearches: restored
+          };
+        });
+      });
+    }, 180);
   };
   const [mode, setMode] = useState("projected");
   const [viewBy, setViewBy] = useState("budgets"); // "תצוגה לפי" בפירוט החודשי — נשמר בין פתיחות
@@ -14560,6 +14582,7 @@ function App() {
     }
   }, recentSearches.slice(0, 4).map(t => {
     const isActive = activeTag === t;
+    const isRemoving = removingTag === t;
     return /*#__PURE__*/React.createElement("span", {
       key: t,
       role: "button",
@@ -14571,45 +14594,56 @@ function App() {
         ...f,
         query: ""
       }))) : activateTag(t),
-      className: "inline-flex items-center rounded-full cursor-pointer select-none transition-all",
+      className: "inline-flex items-center rounded-full cursor-pointer select-none",
       style: {
         gap: 6,
-        paddingInlineStart: 8,
+        paddingInlineStart: 6,
         paddingInlineEnd: 11,
         height: 26,
         fontSize: 12.5,
         fontWeight: 600,
         background: isActive ? GREEN : "#e8f0fe",
         color: isActive ? "#fff" : GREEN,
-        transform: "scale(1)",
-        transition: "background .16s ease, color .16s ease, transform .16s ease"
+        animation: isRemoving ? "searchChipRemove .18s ease-in forwards" : "searchChipIn .18s ease-out both",
+        pointerEvents: isRemoving ? "none" : "auto",
+        transition: "background .16s ease, color .16s ease"
       }
-    }, /*#__PURE__*/React.createElement("span", {
-      role: "button",
-      tabIndex: 0,
-      "aria-label": "מחק את " + t + " מהחיפושים האחרונים",
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      "aria-label": "מחק את החיפוש " + t,
       onMouseDown: e => e.preventDefault(),
       onClick: e => {
         e.stopPropagation();
         deleteTag(t);
       },
-      className: "grid place-items-center rounded-full shrink-0",
+      onKeyDown: e => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          deleteTag(t);
+        }
+      },
+      className: "grid place-items-center rounded-full shrink-0 outline-none",
       style: {
-        width: 16,
-        height: 16,
+        width: 20,
+        height: 20,
         marginInlineStart: -1,
-        opacity: 0.85
+        background: "transparent",
+        opacity: 0.9
       }
     }, /*#__PURE__*/React.createElement("svg", {
-      width: "9",
-      height: "9",
+      width: "12",
+      height: "12",
       viewBox: "0 0 24 24",
       fill: "none",
       stroke: isActive ? "#fff" : GREEN,
-      strokeWidth: "3",
-      strokeLinecap: "round"
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
     }, /*#__PURE__*/React.createElement("path", {
-      d: "M18 6 6 18M6 6l12 12"
+      d: "M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6"
+    }), /*#__PURE__*/React.createElement("path", {
+      d: "M10 11v6M14 11v6"
     }))), /*#__PURE__*/React.createElement("span", null, t));
   }))), !filter.cat && /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between px-1 mb-3"
