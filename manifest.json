@@ -8,10 +8,9 @@
   "orientation": "portrait",
 "icons": [
   {
-    "src": "/icon.png?v=2",
+    "src": "/pocky-app-icon.png",
     "sizes": "1024x1024",
     "type": "image/png",
     "purpose": "any"
   }
-]
 }
