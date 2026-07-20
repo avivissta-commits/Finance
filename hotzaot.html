@@ -11244,7 +11244,19 @@ function BudgetDetail({
   const pv = usagePct(used, planned),
     pct = pv == null ? 0 : pv,
     left = planned - used,
-    t = tone(pct);
+    t = (() => {
+      const base = tone(pct);
+      if (planned <= 0) return base;
+      const pace = getBudgetPaceStatus(pct, monthFraction(todayYM()) * 100);
+      // צבע לפי מצב הקצב, טקסט מהמקור המאוחד
+      const paceColor = pace.status === "over" ? RED : pace.status === "risk" ? RED : pace.status === "high" ? AMBER : pace.status === "slightlyAbove" ? AMBER : GREEN;
+      return {
+        ...base,
+        label: pace.labelShort,
+        insight: pace.shortInsight,
+        c: paceColor
+      };
+    })();
   const Row = ({
     e
   }) => /*#__PURE__*/React.createElement("button", {
