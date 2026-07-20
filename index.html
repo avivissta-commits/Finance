@@ -5377,36 +5377,61 @@ function RingDetail({
       const fracPct = Math.round(ins.frac * 100);
       const usedPctTxt = usagePctText(g.used, g.target);
       const clr = g.atRisk ? AMBER : GREEN;
-      body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-        className: "text-center mb-4"
+      const ps = getBudgetPaceStatus(g.ratio * 100, fracPct);
+      const catName = (catOf(g.catId) || {}).name || "";
+      const paceLine = fracPct - Math.round(g.ratio * 100) > 5 ? "הקצב נמוך מהמתוכנן." : Math.round(g.ratio * 100) - fracPct > 5 ? "הקצב גבוה מהמתוכנן." : "הקצב תואם למתוכנן.";
+      body = /*#__PURE__*/React.createElement(React.Fragment, null,
+      // 1. Header — שם + קטגוריה
+      /*#__PURE__*/React.createElement("div", {
+        className: "text-center mb-3"
       }, /*#__PURE__*/React.createElement("div", {
-        className: "text-[15px] font-bold mb-0.5",
+        className: "text-[16px] font-bold",
         style: {
           color: INK
         }
-      }, g.emoji, " ", g.name), /*#__PURE__*/React.createElement("div", {
-        className: "font-bold text-[30px]",
+      }, g.emoji, " ", g.name), catName && /*#__PURE__*/React.createElement("div", {
+        className: "text-[12px] text-stone-400 mt-0.5"
+      }, "תקציב · ", catName)),
+      // 2. תובנה קצרה
+      /*#__PURE__*/React.createElement("div", {
+        className: "rounded-2xl px-4 py-3 mb-3 text-center",
+        style: {
+          background: g.atRisk ? "rgba(245,160,40,0.12)" : "rgba(47,111,237,0.1)"
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "text-[13px] font-bold",
+        style: {
+          color: g.atRisk ? "#b45309" : "#2f6fed"
+        }
+      }, ps.shortInsight)),
+      // 3. כרטיס מספרים מרכזי אחד — נשאר + נוצל מתוך
+      /*#__PURE__*/React.createElement("div", {
+        className: "rounded-2xl px-4 py-4 text-center mb-3",
+        style: field
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "text-[26px]",
+        style: {
+          color: clr,
+          fontWeight: 800
+        }
+      }, shekel(Math.max(0, left)), " נשארו"), /*#__PURE__*/React.createElement("div", {
+        className: "text-[13px] text-stone-400 mt-1"
+      }, shekel(g.used), " נוצלו מתוך ", shekel(g.target))),
+      // 4. קצב מול הזמן
+      /*#__PURE__*/React.createElement(SectionTitle, null, "קצב מול הזמן"),
+      /*#__PURE__*/React.createElement("div", {
+        className: "flex gap-2"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex-1 rounded-2xl px-3 py-2.5 text-center",
+        style: field
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "text-[20px] font-bold",
         style: {
           color: clr
         }
       }, usedPctTxt), /*#__PURE__*/React.createElement("div", {
-        className: "text-[12px] text-stone-400 mt-0.5"
-      }, "נוצלו מתוך תקציב של ", shekel(g.target))), /*#__PURE__*/React.createElement(Flow, {
-        steps: [{
-          k: "תקציב חודשי",
-          v: g.target
-        }, {
-          k: "נוצל בפועל",
-          v: g.used,
-          sign: "− "
-        }, {
-          k: "נשאר",
-          v: Math.max(0, left),
-          strong: true
-        }]
-      }), /*#__PURE__*/React.createElement("div", {
-        className: "flex gap-2 mt-3"
-      }, /*#__PURE__*/React.createElement("div", {
+        className: "text-[11px] text-stone-400 mt-0.5"
+      }, "ניצול תקציב")), /*#__PURE__*/React.createElement("div", {
         className: "flex-1 rounded-2xl px-3 py-2.5 text-center",
         style: field
       }, /*#__PURE__*/React.createElement("div", {
@@ -5416,32 +5441,22 @@ function RingDetail({
         }
       }, fracPct, "%"), /*#__PURE__*/React.createElement("div", {
         className: "text-[11px] text-stone-400 mt-0.5"
-      }, "מהחודש עברו")), /*#__PURE__*/React.createElement("div", {
-        className: "flex-1 rounded-2xl px-3 py-2.5 text-center",
+      }, "זמן שעבר"))),
+      /*#__PURE__*/React.createElement("div", {
+        className: "text-center text-[12.5px] text-stone-500 mt-2 mb-1"
+      }, paceLine),
+      // 5. פעילות החודש — סיכום קצר בלבד (לא רשימה מלאה)
+      exps.length > 0 && /*#__PURE__*/React.createElement("div", {
+        className: "rounded-2xl px-4 py-3 mt-3 flex items-center justify-between",
         style: field
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "text-[20px] font-bold",
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-[13px] font-semibold",
         style: {
-          color: clr
+          color: INK
         }
-      }, usedPctTxt), /*#__PURE__*/React.createElement("div", {
-        className: "text-[11px] text-stone-400 mt-0.5"
-      }, "מהתקציב נוצלו"))), /*#__PURE__*/React.createElement("div", {
-        className: "rounded-2xl px-4 py-3 mt-3 text-[13px] leading-relaxed text-center",
-        style: {
-          background: g.atRisk ? "rgba(245,160,40,0.12)" : "rgba(47,111,237,0.1)",
-          color: g.atRisk ? "#b45309" : "#2f6fed"
-        }
-      }, /*#__PURE__*/React.createElement(React.Fragment, null, getBudgetPaceStatus(g.ratio * 100, fracPct).shortInsight)), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות בתקציב · ", shekel(g.used)), /*#__PURE__*/React.createElement("div", {
-        className: "space-y-1.5"
-      }, exps.map(e => /*#__PURE__*/React.createElement(Row, {
-        key: e.id,
-        emoji: e.emoji || g.emoji,
-        name: e.name,
-        sub: expSub(e),
-        right: shekel(+e.amount || 0),
-        onTap: () => onEditExpense(e)
-      })))));
+      }, "פעילות החודש"), /*#__PURE__*/React.createElement("span", {
+        className: "text-[13px] text-stone-500"
+      }, exps.length, " הוצאות · ", shekel(g.used))));
     }
   } else if (ring === "biggest") {
     const g = ins.biggest;
@@ -12535,10 +12550,11 @@ function WeeklyDetailSheet({
       marginBottom: 24
     }
   }, /*#__PURE__*/React.createElement("div", {
-    className: "font-extrabold tabular-nums leading-none",
+    className: "tabular-nums leading-none",
     style: {
-      color: INK,
-      fontSize: 44
+      color: GREEN,
+      fontSize: 44,
+      fontWeight: 800
     }
   }, shekel(curRate)), /*#__PURE__*/React.createElement("div", {
     className: "text-[14px] font-semibold text-stone-500 mt-1.5"
