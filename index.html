@@ -4284,10 +4284,11 @@ function buildInsights(data, calc, ym) {
       title: `${g.name} מתקדם מהר מהצפוי`,
       desc: `נוצלו ${Math.round(g.ratio * 100)}% מהתקציב, אבל עברו רק ${Math.round(ins.frac * 100)}% מהחודש.`,
       primary: {
-        label: "פתח תקציב",
+        label: "הצג פירוט",
         act: {
-          kind: "budget",
-          id: g.id
+          kind: "ring",
+          ring: "closest",
+          budgetId: g.id
         }
       }
     });
@@ -4923,6 +4924,7 @@ function RingsCarousel({
 /* ============================ פירוט רינג (Bottom Sheet) ============================ */
 function RingDetail({
   ring,
+  budgetId,
   calc,
   mode,
   ym,
@@ -5364,7 +5366,29 @@ function RingDetail({
       rightColor: AMBER
     })));
   } else if (ring === "closest") {
-    const g = ins.closest;
+    let g = ins.closest;
+    // אם הועבר budgetId מפורש (למשל מהתראת קצב) — נשתמש בתקציב הספציפי הזה
+    if (budgetId) {
+      const b = byId[budgetId];
+      if (b) {
+        const used = calc.usedByBudget[b.id] || 0;
+        const target = +b.target || 0;
+        const ratio = target > 0 ? used / target : 0;
+        const frac = ins.frac != null ? ins.frac : monthFraction(ym);
+        g = {
+          id: b.id,
+          name: b.name,
+          emoji: b.emoji,
+          catId: b.catId,
+          target: target,
+          used: used,
+          ratio: ratio,
+          frac: frac,
+          atRisk: ratio < 1 && (frac > 0 ? ratio > frac + 0.03 : ratio > 0),
+          budget: b
+        };
+      }
+    }
     title = g ? getBudgetPaceStatus(g.ratio * 100, (g.frac != null ? g.frac : ins.frac || 0) * 100).title : "קרוב לתקציב";
     if (!g) {
       body = /*#__PURE__*/React.createElement("div", {
@@ -13766,7 +13790,8 @@ function App() {
     setTimeout(() => {
       if (act.kind === "ring") setModal({
         type: "ringDetail",
-        ring: act.ring
+        ring: act.ring,
+        budgetId: act.budgetId
       });else if (act.kind === "fixedDetail") setModal({
         type: "fixedDetail"
       });else if (act.kind === "reserveDetail") setModal({
@@ -15640,6 +15665,7 @@ function App() {
     onClose: closeModal
   }), modal?.type === "ringDetail" && /*#__PURE__*/React.createElement(RingDetail, {
     ring: modal.ring,
+    budgetId: modal.budgetId,
     calc: calc,
     mode: mode,
     ym: ym,
