@@ -3275,6 +3275,53 @@ function monthFraction(ym) {
   if (ym > cur) return 0;
   return Math.min(1, new Date().getDate() / dim);
 }
+// מצב קצב תקציב לפי ניצול מול זמן שעבר. מחזיר תווית קצרה (לרינג) + הסבר מלא (ל-Sheet).
+function getBudgetPaceStatus(budgetUsedPercent, monthElapsedPercent) {
+  const paceDelta = budgetUsedPercent - monthElapsedPercent;
+  if (budgetUsedPercent >= 100) {
+    return {
+      status: "over",
+      labelShort: "חריגה",
+      title: "חריגה מהתקציב",
+      shortInsight: "התקציב כבר עבר את הסכום שהוגדר.",
+      explanation: "התקציב נוצל במלואו או עבר את הסכום שהוגדר."
+    };
+  }
+  if (paceDelta <= 0) {
+    return {
+      status: "good",
+      labelShort: "בקצב טוב",
+      title: "בקצב טוב",
+      shortInsight: "נשאר לך מרווח נוח בתקציב.",
+      explanation: "ניצלת פחות מהחלק שעבר בחודש. הקצב הנוכחי מתאים לתקציב."
+    };
+  }
+  if (paceDelta <= 10) {
+    return {
+      status: "slightlyAbove",
+      labelShort: "מעט מעל המתוכנן",
+      title: "מעט מעל המתוכנן",
+      shortInsight: "הקצב מעט גבוה, אבל עדיין בשליטה.",
+      explanation: "נוצל קצת יותר מהחלק שעבר בחודש, אבל עדיין יש מרווח בתקציב."
+    };
+  }
+  if (paceDelta <= 25) {
+    return {
+      status: "high",
+      labelShort: "קצב גבוה",
+      title: "קצב גבוה מהמתוכנן",
+      shortInsight: "כדאי לצמצם שימוש בהמשך החודש.",
+      explanation: "התקציב מנוצל מהר יותר מהזמן שעבר בחודש. אם הקצב ימשיך כך, התקציב עלול להיגמר לפני סוף החודש."
+    };
+  }
+  return {
+    status: "risk",
+    labelShort: "בסיכון",
+    title: "התקציב בסיכון",
+    shortInsight: "כדאי לצמצם כדי לא להגיע לחריגה.",
+    explanation: "הקצב הנוכחי גבוה משמעותית מהזמן שנותר בחודש. כדאי לצמצם שימוש כדי לא לחרוג מהתקציב."
+  };
+}
 function budgetInsights(calc, ym) {
   const frac = monthFraction(ym);
   const flex = calc.budgets.filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id])).map(b => ({
@@ -4799,7 +4846,7 @@ function RingsCarousel({
     center: usagePctText(ins.closest.used, ins.closest.target),
     color: ins.closest.atRisk ? AMBER : GREEN,
     label: `${ins.closest.emoji} ${clip(ins.closest.name)}`,
-    value: ins.closest.atRisk ? "בסיכון לפי הקצב" : "קרוב לתקציב",
+    value: getBudgetPaceStatus(ins.closest.ratio * 100, (ins.closest.frac || 0) * 100).labelShort,
     open: "closest"
   });
   if (ins.opp && oppR > 0) ringList.push({
@@ -5318,7 +5365,7 @@ function RingDetail({
     })));
   } else if (ring === "closest") {
     const g = ins.closest;
-    title = g && g.atRisk ? "בסיכון לפי הקצב" : "קרוב לתקציב";
+    title = g ? getBudgetPaceStatus(g.ratio * 100, (g.frac != null ? g.frac : ins.frac || 0) * 100).title : "קרוב לתקציב";
     if (!g) {
       body = /*#__PURE__*/React.createElement("div", {
         className: "text-center text-stone-400 text-[13px] py-6"
@@ -5385,7 +5432,7 @@ function RingDetail({
           background: g.atRisk ? "rgba(245,160,40,0.12)" : "rgba(47,111,237,0.1)",
           color: g.atRisk ? "#b45309" : "#2f6fed"
         }
-      }, g.atRisk ? /*#__PURE__*/React.createElement(React.Fragment, null, "הניצול גבוה ביחס לשלב הנוכחי של החודש — בקצב הזה התקציב עלול להיגמר עוד לפני סוף החודש.") : /*#__PURE__*/React.createElement(React.Fragment, null, "הקצב תקין ביחס להתקדמות החודש, אבל זה התקציב הכי מנוצל כרגע.")), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות בתקציב · ", shekel(g.used)), /*#__PURE__*/React.createElement("div", {
+      }, /*#__PURE__*/React.createElement(React.Fragment, null, getBudgetPaceStatus(g.ratio * 100, fracPct).shortInsight)), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות בתקציב · ", shekel(g.used)), /*#__PURE__*/React.createElement("div", {
         className: "space-y-1.5"
       }, exps.map(e => /*#__PURE__*/React.createElement(Row, {
         key: e.id,
@@ -12487,7 +12534,31 @@ function WeeklyDetailSheet({
     className: "text-[12px] text-stone-400 mt-1"
   }, `נותרו ${RM.remainingDays} ימים · כ-${RM.remainingWeeks.toFixed(1)} שבועות`)),
   // 2. כרטיס תוצאה — הדבר החשוב ביותר (רק אם יש הצעה משמעותית)
-  showProposal ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  showProposal ? /*#__PURE__*/React.createElement("div", null, 
+  // שורת מהות השינוי — מוצגת לפני ההצעה (בעיה → פתרון)
+  (() => {
+    const msg = getRedistributionMessage(RM, _A);
+    const toneBg = msg.tone === "warn" ? "rgba(245,158,11,0.10)" : msg.tone === "positive" ? "rgba(47,160,94,0.09)" : "rgba(47,111,237,0.07)";
+    const toneColor = msg.tone === "warn" ? "#8a5a00" : msg.tone === "positive" ? "#1a7048" : "#3255a0";
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 24
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "rounded-2xl px-4 py-3 flex items-start gap-2",
+      style: {
+        background: toneBg
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[15px] leading-none mt-0.5 shrink-0"
+    }, msg.icon), /*#__PURE__*/React.createElement("span", {
+      className: "text-[12px] font-semibold leading-relaxed",
+      style: {
+        color: toneColor
+      }
+    }, msg.text)));
+  })(),
+  /*#__PURE__*/React.createElement("div", {
     className: "rounded-2xl text-center",
     style: {
       background: "rgba(47,111,237,0.08)",
@@ -12540,29 +12611,6 @@ function WeeklyDetailSheet({
       color: GREEN
     }
   }, "מוצע")), CmpRow("יתרה צפויה", curAvail, recAvail, 0), CmpRow("יעד החיסכון", goal, recSavings, 1), CmpRow("זמין לשבוע", curRate, recRate, 2)),
-  // 4. שורת מהות השינוי — מודגשת, לפי סוג ההמלצה + הסבר משני קטן
-  (() => {
-    const msg = getRedistributionMessage(RM, _A);
-    const toneBg = msg.tone === "warn" ? "rgba(245,158,11,0.10)" : msg.tone === "positive" ? "rgba(47,160,94,0.09)" : "rgba(47,111,237,0.07)";
-    const toneColor = msg.tone === "warn" ? "#8a5a00" : msg.tone === "positive" ? "#1a7048" : "#3255a0";
-    return /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginBottom: 24
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "rounded-2xl px-4 py-3 flex items-start gap-2",
-      style: {
-        background: toneBg
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "text-[15px] leading-none mt-0.5 shrink-0"
-    }, msg.icon), /*#__PURE__*/React.createElement("span", {
-      className: "text-[12px] font-semibold leading-relaxed",
-      style: {
-        color: toneColor
-      }
-    }, msg.text)));
-  })(),
   // 5. כפתור
   /*#__PURE__*/React.createElement("button", {
     onClick: onRedistribute,
