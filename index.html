@@ -3032,8 +3032,27 @@ function MonthCard({
   const endTotal = Math.max(0, calc.projected); // חודש שהסתיים: סה״כ נשאר (כולל מה שנשמר לחיסכון)
   const over = actual ? calc.remainingNow < 0 : monthEnded ? calc.projected < -0.5 : netAvail < 0;
   const mainVal = actual ? calc.remainingNow : monthEnded ? calc.projected < -0.5 ? calc.projected : endTotal : netAvail;
-  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "החודש הסתיים עם" : isFuture ? over ? `חריגה צפויה בסוף ${monthNameOf(ym)}` : `צפוי להישאר בסוף ${monthNameOf(ym)}` : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "נשאר לשימוש בסוף החודש";
-  const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה`;
+  const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "החודש הסתיים עם" : isFuture ? over ? `חריגה צפויה בסוף ${monthNameOf(ym)}` : `צפוי להישאר בסוף ${monthNameOf(ym)}` : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "מרווח צפוי בסוף החודש";
+  const daysLeftInMonth = (() => {
+    if (mState !== "current") return 0;
+    const {
+      y,
+      m
+    } = ymParts(ym);
+    const dim = new Date(y, m, 0).getDate();
+    return Math.max(1, dim - new Date().getDate() + 1);
+  })();
+  const marginStatusChip = (() => {
+    // צ׳יפ מרווח — רק במצב "צפי" של החודש הנוכחי (לא בפועל)
+    const margin = netAvail;
+    if (margin < 0) return "צפויה חריגה";
+    const daily = daysLeftInMonth > 0 ? margin / daysLeftInMonth : margin;
+    if (daily < 10) return "מרווח לחוץ";
+    if (daily < 30) return "מרווח נמוך";
+    if (daily < 80) return "מרווח סביר";
+    return "מרווח טוב";
+  })();
+  const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : monthEnded || isFuture ? `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה` : marginStatusChip;
   const rows = actual ? [{
     k: "הכנסה",
     v: calc.income,
