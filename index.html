@@ -3322,6 +3322,20 @@ function getBudgetPaceStatus(budgetUsedPercent, monthElapsedPercent) {
     explanation: "הקצב הנוכחי גבוה משמעותית מהזמן שנותר בחודש. כדאי לצמצם שימוש כדי לא לחרוג מהתקציב."
   };
 }
+// מקור אמת יחיד: תקציבים קרובים למגבלה (רינג + Sheet קוראים מכאן)
+function budgetsNearLimit(calc) {
+  return (calc.budgets || []).filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id])).map(b => {
+    const t = +b.target || 0;
+    const u = calc.usedByBudget[b.id] || 0;
+    const r = t ? u / t : 0;
+    return {
+      b,
+      u,
+      t,
+      r
+    };
+  }).filter(x => x.r >= 0.80 && x.r < 1).sort((a, b) => b.r - a.r);
+}
 function budgetInsights(calc, ym) {
   const frac = monthFraction(ym);
   const flex = calc.budgets.filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id])).map(b => ({
@@ -4655,12 +4669,7 @@ function RingsCarousel({
 
   const varB = calc.budgets.filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id]));
   const overCount = varB.filter(b => (calc.usedByBudget[b.id] || 0) > (+b.target || 0)).length;
-  const riskCount = varB.filter(b => {
-    const t = +b.target || 0;
-    const u = calc.usedByBudget[b.id] || 0;
-    const r = t ? u / t : 0;
-    return r >= 0.80 && r < 1;
-  }).length;
+  const riskCount = budgetsNearLimit(calc).length;
   const shares = categoryShares(data, calc).slice(0, 3);
 
   // ---- כל הרינגים שהמערכת מציעה, לפי סדר חשיבות. נאגור רק את מה שיש בו מידע אמיתי ----
@@ -4936,6 +4945,7 @@ function RingDetail({
   onClose
 }) {
   const byId = {};
+  const [expExpanded, setExpExpanded] = useState(false);
   calc.budgets.forEach(b => byId[b.id] = b);
   const cats = data.categories || [];
   const catOf = id => cats.find(c => c.id === id);
@@ -4943,6 +4953,36 @@ function RingDetail({
     y,
     m
   } = ymParts(ym);
+  // רשימת הוצאות עם 4 אחרונות + הרחבה אנימטיבית (אחיד עם פירוט תקציב)
+  const renderExpList = (list, mkRow, limit = 4) => {
+    const sorted = [...list].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const visible = sorted.slice(0, limit);
+    const hidden = sorted.slice(limit);
+    const hiddenTotal = hidden.reduce((sum, e) => sum + (+e.amount || 0), 0);
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, visible.map(mkRow)), hidden.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        paddingTop: expExpanded ? 6 : 0,
+        transition: "padding-top .3s cubic-bezier(.22,1,.36,1)"
+      }
+    }, /*#__PURE__*/React.createElement(Collapse, {
+      open: expExpanded
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, hidden.map(mkRow)))), hidden.length > 0 && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setExpExpanded(v => !v),
+      className: "w-full mt-2 rounded-2xl h-10 flex items-center justify-between px-4 transition-transform active:scale-[0.99]",
+      style: {
+        background: "#e8f0fe",
+        color: GREEN
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] font-semibold"
+    }, expExpanded ? "הצג פחות" : `עוד ${hidden.length} הוצאות`), !expExpanded && /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] font-bold"
+    }, shekel(hiddenTotal))));
+  };
   const cur = todayYM(),
     todayIso = todayISO();
   const realized = e => ym < cur ? true : ym > cur ? false : isISO(e.date) ? e.date.slice(0, 10) <= todayIso : true;
@@ -5523,16 +5563,14 @@ function RingDetail({
       }, shekel(-diff)), " פחות מהחודש הקודם (", shekel(prevUsed), ") 👏")) : /*#__PURE__*/React.createElement("div", {
         className: "rounded-2xl px-4 py-3 text-[13px] text-stone-400 text-center",
         style: field
-      }, "אין נתונים מהחודש הקודם להשוואה."), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות · ", shekel(g.used)), /*#__PURE__*/React.createElement("div", {
-        className: "space-y-1.5"
-      }, exps.map(e => /*#__PURE__*/React.createElement(Row, {
+      }, "אין נתונים מהחודש הקודם להשוואה."), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות · ", shekel(g.used)), /*#__PURE__*/renderExpList(exps, e => /*#__PURE__*/React.createElement(Row, {
         key: e.id,
         emoji: e.emoji || g.emoji,
         name: e.name,
         sub: expSub(e),
         right: shekel(+e.amount || 0),
         onTap: () => onEditExpense(e)
-      })))));
+      }))));
     }
   } else if (ring === "opportunity") {
     const g = ins.opp;
@@ -5591,16 +5629,14 @@ function RingDetail({
         }
       }, usedPct), /*#__PURE__*/React.createElement("div", {
         className: "text-[11px] text-stone-400 mt-0.5"
-      }, "מהתקציב נוצל"))), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות · ", shekel(g.used)), /*#__PURE__*/React.createElement("div", {
-        className: "space-y-1.5"
-      }, exps.map(e => /*#__PURE__*/React.createElement(Row, {
+      }, "מהתקציב נוצל"))), exps.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, exps.length, " הוצאות · ", shekel(g.used)), /*#__PURE__*/renderExpList(exps, e => /*#__PURE__*/React.createElement(Row, {
         key: e.id,
         emoji: e.emoji || g.emoji,
         name: e.name,
         sub: expSub(e),
         right: shekel(+e.amount || 0),
         onTap: () => onEditExpense(e)
-      })))));
+      }), 2)));
     }
   } else if (ring === "over") {
     title = "תקציבים בחריגה";
@@ -5639,17 +5675,7 @@ function RingDetail({
     }, "אין תקציבים בחריגה 🎉"));
   } else if (ring === "risk") {
     title = "קרובים למגבלה";
-    const list = calc.budgets.filter(b => !b.fixed).map(b => {
-      const t = +b.target || 0,
-        u = calc.usedByBudget[b.id] || 0,
-        r = t ? u / t : 0;
-      return {
-        b,
-        u,
-        t,
-        r
-      };
-    }).filter(x => x.r >= 0.85 && x.r < 1).sort((a, b) => b.r - a.r);
+    const list = budgetsNearLimit(calc);
     body = /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "text-center mb-4"
     }, /*#__PURE__*/React.createElement("div", {
@@ -5659,7 +5685,7 @@ function RingDetail({
       }
     }, list.length), /*#__PURE__*/React.createElement("div", {
       className: "text-[12px] text-stone-400 mt-0.5"
-    }, "תקציבים שמתקרבים למגבלה (85%+)")), list.length > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, "כדאי לשים לב"), /*#__PURE__*/React.createElement("div", {
+    }, "תקציבים שמתקרבים למגבלה (80%+)")), list.length > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SectionTitle, null, "כדאי לשים לב"), /*#__PURE__*/React.createElement("div", {
       className: "space-y-1.5"
     }, list.map(({
       b,
@@ -11264,9 +11290,11 @@ function BudgetDetail({
   onEditBudget,
   onQuickAdd,
   onUpdateBudget,
+  onOpenPace,
   onClose
 }) {
   const cat = data.categories.find(c => c.id === budget.catId);
+  const [expExpanded, setExpExpanded] = useState(false);
   const planned = +budget.target || 0;
   if (budget.fixed) {
     return /*#__PURE__*/React.createElement(FixedBudgetDetail, {
@@ -11337,7 +11365,10 @@ function BudgetDetail({
   }, /*#__PURE__*/React.createElement(LockIcon, {
     size: 12
   }), "תקציב נעול"), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-3 rounded-2xl p-3 mb-3",
+    onClick: () => onOpenPace && onOpenPace(budget),
+    role: "button",
+    tabIndex: 0,
+    className: "flex items-center gap-3 rounded-2xl p-3 mb-3 cursor-pointer transition-transform active:scale-[0.985]",
     style: field
   }, /*#__PURE__*/React.createElement(Ring, {
     pct: pct,
@@ -11359,21 +11390,61 @@ function BudgetDetail({
     style: {
       color: t.c
     }
-  }, left < 0 ? "חריגה של " + shekel(-left) : "נשאר " + shekel(left), " · ", t.label))), !exps.length && /*#__PURE__*/React.createElement("div", {
+  }, left < 0 ? "חריגה של " + shekel(-left) : "נשאר " + shekel(left), " · ", t.label)), /*#__PURE__*/React.createElement("div", {
+    className: "shrink-0 flex items-center gap-0.5 text-[11.5px] font-semibold",
+    style: {
+      color: GREEN
+    }
+  }, "הצג קצב", /*#__PURE__*/React.createElement("svg", {
+    width: "13",
+    height: "13",
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: GREEN,
+    strokeWidth: "2.5",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "m14 6-6 6 6 6"
+  })))), !exps.length && /*#__PURE__*/React.createElement("div", {
     className: "text-center text-stone-400 text-[13px] py-4 rounded-2xl mb-3",
     style: {
       background: "rgba(255,255,255,0.4)"
     }
-  }, "אין עדיין הוצאות בתקציב הזה."), exps.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "mb-3"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-[12px] font-semibold text-stone-500 mb-1.5 px-1"
-  }, "🧾 הוצאות החודש"), /*#__PURE__*/React.createElement("div", {
-    className: "space-y-1.5"
-  }, exps.map(e => /*#__PURE__*/React.createElement(Row, {
-    key: e.id,
-    e: e
-  })))), locked ? /*#__PURE__*/React.createElement("div", {
+  }, "אין עדיין הוצאות בתקציב הזה."), exps.length > 0 && (() => {
+    const sorted = [...exps].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const visible = sorted.slice(0, 4);
+    const hidden = sorted.slice(4);
+    const hiddenTotal = hidden.reduce((sum, e) => sum + (+e.amount || 0), 0);
+    return /*#__PURE__*/React.createElement("div", {
+      className: "mb-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-[12px] font-semibold text-stone-500 mb-1.5 px-1"
+    }, "\uD83E\uDDFE \u05d4\u05d5\u05e6\u05d0\u05d5\u05ea \u05d4\u05d7\u05d5\u05d3\u05e9"), /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5"
+    }, visible.map(e => /*#__PURE__*/React.createElement(Row, {
+      key: e.id,
+      e: e
+    }))), hidden.length > 0 && /*#__PURE__*/React.createElement(Collapse, {
+      open: expExpanded
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "space-y-1.5 pt-1.5"
+    }, hidden.map(e => /*#__PURE__*/React.createElement(Row, {
+      key: e.id,
+      e: e
+    })))), hidden.length > 0 && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setExpExpanded(v => !v),
+      className: "w-full mt-2 rounded-2xl h-10 flex items-center justify-between px-4 transition-transform active:scale-[0.99]",
+      style: {
+        background: "#e8f0fe",
+        color: GREEN
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] font-semibold"
+    }, expExpanded ? "\u05d4\u05e6\u05d2 \u05e4\u05d7\u05d5\u05ea" : `\u05e2\u05d5\u05d3 ${hidden.length} \u05d4\u05d5\u05e6\u05d0\u05d5\u05ea`), !expExpanded && /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] font-bold"
+    }, shekel(hiddenTotal))));
+  })(), locked ? /*#__PURE__*/React.createElement("div", {
     className: "w-full rounded-2xl h-11 mb-2 flex items-center justify-center gap-1.5 font-bold text-[14px]",
     style: {
       background: "rgba(122,134,158,0.10)",
@@ -15715,6 +15786,11 @@ function App() {
       editing: (data.budgets || []).find(b => b.id === modal.budget.id) || modal.budget
     }),
     onQuickAdd: () => openQuickAdd(modal.budget),
+    onOpenPace: b => setModal({
+      type: "ringDetail",
+      ring: "closest",
+      budgetId: b.id
+    }),
     onUpdateBudget: updateBudget,
     onClose: closeModal
   }), modal?.type === "catDetail" && /*#__PURE__*/React.createElement(CategoryDetail, {
