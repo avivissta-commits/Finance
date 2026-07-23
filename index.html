@@ -11444,14 +11444,19 @@ function BudgetDetail({
     }, visible.map(e => /*#__PURE__*/React.createElement(Row, {
       key: e.id,
       e: e
-    }))), hidden.length > 0 && /*#__PURE__*/React.createElement(Collapse, {
+    }))), hidden.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        paddingTop: expExpanded ? 6 : 0,
+        transition: "padding-top .3s cubic-bezier(.22,1,.36,1)"
+      }
+    }, /*#__PURE__*/React.createElement(Collapse, {
       open: expExpanded
     }, /*#__PURE__*/React.createElement("div", {
-      className: "space-y-1.5 pt-1.5"
+      className: "space-y-1.5"
     }, hidden.map(e => /*#__PURE__*/React.createElement(Row, {
       key: e.id,
       e: e
-    })))), hidden.length > 0 && /*#__PURE__*/React.createElement("button", {
+    }))))), hidden.length > 0 && /*#__PURE__*/React.createElement("button", {
       onClick: () => setExpExpanded(v => !v),
       className: "w-full mt-2 rounded-2xl h-10 flex items-center justify-between px-4 transition-transform active:scale-[0.99]",
       style: {
@@ -12700,12 +12705,22 @@ function WeeklyDetailSheet({
       }
     }, msg.text)));
   })(),
+  // כרטיס אחוד: ההצעה (תכלת, פנימית) + טבלת ההשוואה — יחידה ויזואלית אחת
+  /*#__PURE__*/React.createElement("div", {
+    className: "rounded-3xl",
+    style: {
+      ...field,
+      padding: 18,
+      marginBottom: 16
+    }
+  },
+  // ההצעה — highlight פנימי, לא נוגע בקצוות
   /*#__PURE__*/React.createElement("div", {
     className: "rounded-2xl text-center",
     style: {
       background: "rgba(47,111,237,0.08)",
       padding: 16,
-      marginBottom: 24
+      marginBottom: 18
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-[12.5px] font-semibold mb-2",
@@ -12732,15 +12747,8 @@ function WeeklyDetailSheet({
   }, `${shekel(recRate)}`)), /*#__PURE__*/React.createElement("div", {
     className: "text-[12px] font-semibold text-stone-500 mt-1"
   }, unit)),
-  // 3. טבלת השוואה
+  // טבלת ההשוואה — פירוט מתחת להצעה
   /*#__PURE__*/React.createElement("div", {
-    className: "rounded-2xl",
-    style: {
-      ...field,
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
     className: "grid mb-1",
     style: {
       gridTemplateColumns: "1fr auto 1fr auto 1fr"
