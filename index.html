@@ -2141,8 +2141,8 @@ function applyIncome(d, ym, v, scope) {
 }
 
 /* ============================ חישובים ============================ */
-function useCalc(data, ym) {
-  return useMemo(() => {
+// חישוב טהור — ניתן לקריאה לכל חודש (גם היסטורי), בלי hooks
+function computeCalc(data, ym) {
     const budgets = (data.budgets || []).filter(b => !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm)) && !(b.onlyMonth && b.onlyMonth !== ym)).map(b => {
       const mt = b.targetByMonth && b.targetByMonth[ym];
       return mt != null && mt !== "" ? {
@@ -2296,7 +2296,9 @@ function useCalc(data, ym) {
       pctRemaining: income ? remainingNow / income * 100 : 0,
       pctCommitted: income ? committed / income * 100 : 0
     };
-  }, [data, ym]);
+}
+function useCalc(data, ym) {
+  return useMemo(() => computeCalc(data, ym), [data, ym]);
 }
 
 /* ============================ רכיבים קטנים ============================ */
@@ -3341,6 +3343,130 @@ function getBudgetPaceStatus(budgetUsedPercent, monthElapsedPercent) {
     explanation: "הקצב הנוכחי גבוה משמעותית מהזמן שנותר בחודש. כדאי לצמצם שימוש כדי לא לחרוג מהתקציב."
   };
 }
+// ===== Budget Calibration — זיהוי דפוס חוזר והמלצה להתאמת מסגרת התקציב =====
+// טהור. בודק 2 חודשים שהסתיימו (+ החודש הנוכחי לחריגה בפועל), ומתחשב במצב הפיננסי הכללי.
+function getBudgetCalibration(data, ym, curCalc) {
+  const cur = curCalc || computeCalc(data, ym);
+  const round10 = n => Math.round(n / 10) * 10;
+  const m1 = shiftYM(ym, -1),
+    m2 = shiftYM(ym, -2);
+  const c1 = computeCalc(data, m1),
+    c2 = computeCalc(data, m2);
+  // מצב פיננסי כללי: האם יש מרווח להגדיל תקציב בלי להיכנס למינוס
+  const goal = typeof goalFor === "function" ? goalFor(data, ym) : 0;
+  const savedAmt = Math.min(goal, Math.max(0, cur.projected));
+  const margin = cur.projected - savedAmt;
+  const healthy = margin > 0 && (cur.overspend || 0) <= 0;
+  const out = [];
+  (cur.budgets || []).forEach(b => {
+    if (b.fixed) return; // הוצאות קבועות — מסגרת = העלות עצמה
+    const baseLimit = +b.target || 0;
+    const locked = !!(cur.lockedByBudget && cur.lockedByBudget[b.id]);
+    const hasRecurring = (data.expenses || []).some(e => e.budgetId === b.id && e.recur && +e.recur.freq);
+    // תקציב נעול ללא הוצאות חוזרות = מותרות/אופציונלי שהמשתמש שומר סגור בכוונה → להתעלם
+    if (locked && !hasRecurring) return;
+    const snap = (c, mm) => {
+      const bb = (c.budgets || []).find(x => x.id === b.id);
+      if (!bb) return null;
+      const limit = +bb.target || 0;
+      const spent = c.usedByBudget[b.id] || 0;
+      const ov = b.targetByMonth && b.targetByMonth[mm];
+      const manualUp = ov != null && ov !== "" && +ov > baseLimit;
+      return {
+        m: mm,
+        limit,
+        spent,
+        manualUp,
+        over: limit > 0 && spent > limit,
+        bigSurplus: limit > 0 && limit - spent >= Math.max(50, limit * 0.20)
+      };
+    };
+    const sCur = snap(cur, ym),
+      s1 = snap(c1, m1),
+      s2 = snap(c2, m2);
+    if (!s1 || !s2) return; // אין מספיק היסטוריה
+    if (s1.limit <= 0 && s2.limit <= 0) return;
+    const tooLow = x => !!x && (x.over || x.manualUp && x.spent > 0);
+    let direction = null,
+      used = [];
+    // מסגרת נמוכה מדי — 2 חודשים רצופים (או חודש שהסתיים + חריגה בפועל החודש)
+    if (tooLow(s1) && tooLow(s2)) {
+      direction = "increase";
+      used = [s1, s2];
+    } else if (sCur && sCur.over && tooLow(s1)) {
+      direction = "increase";
+      used = [sCur, s1];
+    } else if (s1.bigSurplus && s2.bigSurplus && s1.spent > 0 && s2.spent > 0) {
+      // מסגרת גבוהה מדי — רק לפי חודשים שהסתיימו, ורק אם היה שימוש אמיתי
+      // (תקציב חדש/לא בשימוש יראה "עודף" מזויף)
+      direction = "decrease";
+      used = [s1, s2];
+    }
+    if (!direction) return;
+    const avgSpent = used.reduce((a, x) => a + x.spent, 0) / used.length;
+    const recommended = direction === "increase" ? round10(avgSpent) : round10(avgSpent * 1.05);
+    const delta = recommended - baseLimit;
+    // לא להציק על שינוי זניח
+    if (Math.abs(delta) < Math.max(10, baseLimit * 0.05)) return;
+    if (direction === "increase" && delta <= 0) return;
+    if (direction === "decrease" && delta >= 0) return;
+    const canAfford = delta <= margin;
+    const action = direction === "increase" ? healthy && canAfford ? "updateLimit" : "rebalance" : healthy ? "updateLimit" : "freeUp";
+    out.push({
+      id: `calib:${b.id}:${ym}:${direction}:${Math.abs(Math.round(delta))}`,
+      budgetId: b.id,
+      budgetName: b.name,
+      emoji: b.emoji,
+      direction,
+      subtype: locked ? "locked_budget_limit_adjustment" : "budget_limit_adjustment",
+      isLocked: locked,
+      keepLocked: locked,
+      currentLimit: baseLimit,
+      recommendedLimit: recommended,
+      avgSpent: Math.round(avgSpent),
+      action,
+      healthy,
+      monthsCount: used.length
+    });
+  });
+  return out;
+}
+// מקורות אפשריים לפינוי כסף לצורך הגדלת תקציב מסוים (טהור)
+function getRebalanceSources(calc, ym, data, excludeId) {
+  const out = [];
+  const MIN = 30;
+  (calc.budgets || []).forEach(b => {
+    if (b.fixed || b.id === excludeId) return;
+    if (calc.lockedByBudget && calc.lockedByBudget[b.id]) return;
+    const t = +b.target || 0;
+    const u = calc.usedByBudget[b.id] || 0;
+    const free = t - u;
+    if (t > 0 && free >= MIN) out.push({
+      kind: "budget",
+      id: b.id,
+      name: b.name,
+      emoji: b.emoji || "\uD83C\uDFAF",
+      amount: free
+    });
+  });
+  out.sort((a, b) => b.amount - a.amount);
+  const goal = typeof goalFor === "function" ? goalFor(data, ym) : 0;
+  const saved = Math.min(goal, Math.max(0, calc.projected));
+  const margin = calc.projected - saved;
+  if (margin >= MIN) out.unshift({
+    kind: "margin",
+    name: "יתרה פנויה החודש",
+    emoji: "\uD83D\uDCB5",
+    amount: margin
+  });
+  if (goal > 0 && saved >= MIN) out.push({
+    kind: "savings",
+    name: "הפחתה זמנית מהחיסכון",
+    emoji: "\uD83D\uDC37",
+    amount: saved
+  });
+  return out;
+}
 // מקור אמת יחיד: תקציבים קרובים למגבלה (רינג + Sheet קוראים מכאן)
 function budgetsNearLimit(calc) {
   return (calc.budgets || []).filter(b => !b.fixed && !(calc.lockedByBudget && calc.lockedByBudget[b.id])).map(b => {
@@ -3645,6 +3771,11 @@ function classifyInsight(ins) {
       basis: "fact",
       severity: "critical",
       topic: "budget"
+    },
+    "calib": {
+      basis: "fact",
+      severity: "important",
+      topic: "budgetFrame"
     },
     "inst-due": {
       basis: "fact",
@@ -4308,6 +4439,52 @@ function buildInsights(data, calc, ym) {
       }
     });
   });
+  // ===== המלצות התאמת מסגרת תקציב (דפוס חוזר של 2 חודשים) =====
+  if (mState === "current") {
+    getBudgetCalibration(data, ym, calc).forEach(rc => {
+      const nm = rc.budgetName;
+      const from = shekel(rc.currentLimit),
+        to = shekel(rc.recommendedLimit);
+      let title, desc, label;
+      if (rc.direction === "increase") {
+        title = `${nm} חורג כבר חודשיים`;
+        if (rc.isLocked) {
+          desc = `נראה שהמסגרת הקבועה נמוכה מההוצאות החוזרות שבתוכה. אפשר לעדכן את התקציב ל-${to} ולהשאיר אותו נעול.`;
+          label = "עדכון מסגרת";
+        } else if (rc.action === "rebalance") {
+          desc = `נראה שהמסגרת נמוכה מהשימוש בפועל, אבל החודש כבר צפויה חריגה. כדאי לאזן מחדש לפני שמגדילים את התקציב.`;
+          label = "בדיקת איזון";
+        } else {
+          desc = `נראה שהמסגרת הקבועה נמוכה מהשימוש בפועל. אפשר לעדכן את התקציב מ-${from} ל-${to}.`;
+          label = "עדכון תקציב";
+        }
+      } else {
+        if (rc.action === "freeUp") {
+          title = `אפשר לפנות כסף מ${nm}`;
+          desc = `נשאר שם עודף קבוע בחודשיים האחרונים. הפחתת המסגרת ל-${to} יכולה לעזור לצמצם את החריגה.`;
+          label = "העבר למרווח";
+        } else {
+          title = `נשאר כסף ב${nm} כבר חודשיים`;
+          desc = `אפשר להפחית מעט את התקציב מ-${from} ל-${to} ולהגדיל את המרווח החודשי.`;
+          label = "התאמת תקציב";
+        }
+      }
+      out.push({
+        id: rc.id,
+        level: rc.direction === "increase" && rc.action === "rebalance" ? "yellow" : "blue",
+        icon: rc.direction === "increase" ? "\uD83D\uDCC8" : "\uD83D\uDCC9",
+        title,
+        desc,
+        primary: {
+          label: "בדוק התאמה",
+          act: {
+            kind: "calibration",
+            id: rc.budgetId
+          }
+        }
+      });
+    });
+  }
   if (ins.closest && ins.closest.atRisk) {
     const g = ins.closest;
     out.push({
@@ -4957,6 +5134,7 @@ function RingDetail({
   mode,
   ym,
   data,
+  onBack,
   onOpenBudget,
   onEditExpense,
   onGotoCats,
@@ -5279,7 +5457,8 @@ function RingDetail({
     }
     return /*#__PURE__*/React.createElement(Sheet, {
       title: title,
-      onClose: onClose
+      onBack: onBack,
+    onClose: onClose
     }, body);
   }
   if (ring === "sumSurplus") {
@@ -5462,7 +5641,15 @@ function RingDetail({
       const clr = g.atRisk ? AMBER : GREEN;
       const ps = getBudgetPaceStatus(g.ratio * 100, fracPct);
       const catName = (catOf(g.catId) || {}).name || "";
-      const paceLine = fracPct - Math.round(g.ratio * 100) > 5 ? "הקצב נמוך מהמתוכנן." : Math.round(g.ratio * 100) - fracPct > 5 ? "הקצב גבוה מהמתוכנן." : "הקצב תואם למתוכנן.";
+      const daysLeft = (() => {
+        const p = ymParts(ym);
+        const dim = new Date(p.y, p.m, 0).getDate();
+        if (ym !== todayYM()) return 0;
+        return Math.max(0, dim - new Date().getDate());
+      })();
+      const daysTxt = daysLeft === 1 ? "נותר יום אחד לחודש" : daysLeft === 2 ? "נותרו יומיים לחודש" : `נותרו ${daysLeft} ימים לחודש`;
+      const usedPctNum = Math.round(g.ratio * 100);
+      const paceLine = daysLeft <= 0 ? fracPct - usedPctNum > 5 ? "הקצב נמוך מהמתוכנן." : usedPctNum - fracPct > 5 ? "הקצב גבוה מהמתוכנן." : "הקצב תואם למתוכנן." : fracPct - usedPctNum > 5 ? `${daysTxt}, ונשאר לך מרווח נוח בתקציב.` : usedPctNum - fracPct > 5 ? `${daysTxt}, אבל התקציב מתקדם מהר יותר מהזמן שעבר.` : `${daysTxt}, והתקציב מתקדם בקצב שתואם לזמן שעבר.`;
       body = /*#__PURE__*/React.createElement(React.Fragment, null,
       // 1. Header — שם + קטגוריה
       /*#__PURE__*/React.createElement("div", {
@@ -5788,7 +5975,6 @@ function RingDetail({
   }
   return /*#__PURE__*/React.createElement(Sheet, {
     title: title,
-    subtitle: "מה כדאי לדעת עכשיו",
     onClose: onClose
   }, body, openBudget ? /*#__PURE__*/React.createElement("button", {
     onClick: () => onOpenBudget(openBudget),
@@ -8055,7 +8241,7 @@ function ExpenseForm({
   };
   // זמינות תקציב לבחירה נקבעת לפי חודש ההוצאה (התאריך שנבחר), לא לפי החודש הנוכחי במערכת
   const expenseYm = isISO(date) ? date.slice(0, 7) : editing?.ym || ym || todayYM();
-  const catBudgets = catId ? budgets.filter(b => b.catId === catId && !b.fixed && !(b.onlyMonth && b.onlyMonth !== expenseYm)) : [];
+  const catBudgets = catId ? budgets.filter(b => b.catId === catId && !b.fixed && !(b.onlyMonth && b.onlyMonth !== expenseYm) && !(b.endYm && ymIndex(expenseYm) >= ymIndex(b.endYm))) : [];
   const origBudgetId = editing?.budgetId || null;
   const origYm = editing?.ym || (isISO(editing?.date) ? editing.date.slice(0, 7) : null);
   // אם התקציב שנבחר נעול בחודש ההוצאה — מסירים את השיוך. משמרים רק את השיוך המקורי בחודשו המקורי (grandfather).
@@ -8063,6 +8249,16 @@ function ExpenseForm({
     if (!budgetId) return;
     const lb = budgets.find(x => x.id === budgetId);
     if (!lb || !isBudgetLocked(lb, expenseYm)) return;
+    const grandfathered = budgetId === origBudgetId && expenseYm === origYm;
+    if (!grandfathered) setBudgetId(null);
+  }, [expenseYm, budgetId, catId]);
+  // אם התקציב שנבחר נמחק (endYm) עד חודש ההוצאה, או שכבר לא קיים — מנקים את הבחירה.
+  // משמרים את השיוך המקורי בחודשו המקורי כדי לא לפגוע בהיסטוריה.
+  React.useEffect(() => {
+    if (!budgetId) return;
+    const sb = budgets.find(x => x.id === budgetId);
+    const gone = !sb || sb.endYm && ymIndex(expenseYm) >= ymIndex(sb.endYm) || sb.onlyMonth && sb.onlyMonth !== expenseYm;
+    if (!gone) return;
     const grandfathered = budgetId === origBudgetId && expenseYm === origYm;
     if (!grandfathered) setBudgetId(null);
   }, [expenseYm, budgetId, catId]);
@@ -11309,6 +11505,7 @@ function BudgetDetail({
   onEditBudget,
   onQuickAdd,
   onUpdateBudget,
+  onBack,
   onOpenPace,
   onClose
 }) {
@@ -11374,6 +11571,7 @@ function BudgetDetail({
   return /*#__PURE__*/React.createElement(Sheet, {
     title: `${budget.emoji} ${budget.name}`,
     subtitle: cat ? `תקציב · ${cat.name}` : "תקציב",
+    onBack: onBack,
     onClose: onClose
   }, locked && /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-center gap-1.5 rounded-full mx-auto mb-3 px-3 py-1.5 text-[12px] font-bold w-fit",
@@ -12419,13 +12617,14 @@ function Empty({
 function BudgetDeleteDialog({
   budget,
   data,
+  ym,
   count,
   onMove,
   onUnbudget,
   onDeleteAll,
   onCancel
 }) {
-  const others = (data.budgets || []).filter(b => b.id !== budget.id && !b.fixed);
+  const others = (data.budgets || []).filter(b => b.id !== budget.id && !b.fixed && !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm)) && !(b.onlyMonth && b.onlyMonth !== ym));
   const [target, setTarget] = useState(others[0]?.id || null);
   return /*#__PURE__*/React.createElement(Sheet, {
     title: `מחיקת "${budget.name}"`,
@@ -12795,6 +12994,7 @@ function RedistributeSheet({
   data,
   calc,
   ym,
+  onBack,
   onApply,
   onClose
 }) {
@@ -13033,6 +13233,7 @@ function RedistributeSheet({
   return /*#__PURE__*/React.createElement(Sheet, {
     title: `חלוקה מחדש ל${monthNameOf(ym)}`,
     subtitle: "רק לחודש זה",
+    onBack: onBack,
     onClose: onClose
   },
   // ב. הקשר קטן
@@ -13199,6 +13400,163 @@ function RedistributeSheet({
       color: GREEN
     }
   }, "ביטול")));
+}
+function BudgetRebalanceSheet({
+  rec,
+  sources,
+  onOpenBudget,
+  onEditBudget,
+  onRedistribute,
+  onBack,
+  onClose
+}) {
+  if (!rec) return null;
+  const needed = Math.max(0, rec.recommendedLimit - rec.currentLimit);
+  const total = (sources || []).reduce((s, x) => s + x.amount, 0);
+  const covers = total >= needed;
+  const Btn = (label, onClick, primary) => /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    className: "w-full rounded-2xl h-11 font-bold text-[14px] transition-transform active:scale-[0.99]",
+    style: primary ? {
+      background: greenGrad,
+      color: "#fff"
+    } : {
+      ...field,
+      color: GREEN
+    }
+  }, label);
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: `איזון לפני הגדלת ${rec.budgetName}`,
+    subtitle: "צריך לפנות כסף לפני שמגדילים את התקציב",
+    onBack: onBack,
+    onClose: onClose
+  },
+  // הפער שצריך לפתור
+  /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-4 text-center mb-4",
+    style: {
+      background: "rgba(47,111,237,0.09)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "tabular-nums leading-none",
+    style: {
+      color: GREEN,
+      fontSize: 34,
+      fontWeight: 800
+    }
+  }, shekel(needed)), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12.5px] font-semibold text-stone-500 mt-1.5"
+  }, "צריך לפנות החודש")), /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] leading-relaxed text-center px-1 mb-4",
+    style: {
+      color: "#57534e"
+    }
+  }, `כדי לעדכן את ${rec.budgetName} מ-${shekel(rec.currentLimit)} ל-${shekel(rec.recommendedLimit)}, צריך לפנות כ-${shekel(needed)} ממקומות אחרים החודש.`),
+  // מקורות אפשריים / מצב ריק מפורש
+  (sources || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-5 text-center mb-4",
+    style: {
+      background: "rgba(245,158,11,0.10)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] font-bold mb-1",
+    style: {
+      color: "#8a5a00"
+    }
+  }, "אין יתרה פנויה החודש"), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] leading-relaxed",
+    style: {
+      color: "#8a5a00"
+    }
+  }, "לא נמצאו מקורות לפינוי כסף החודש. אפשר להשאיר את התקציב למעקב ולבחון שוב בחודש הבא.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] font-bold text-stone-500 mt-4 mb-2 px-1"
+  }, "מאיפה אפשר לפנות"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5 mb-2"
+  }, sources.map(sc => /*#__PURE__*/React.createElement("button", {
+    key: sc.kind + ":" + (sc.id || sc.name),
+    onClick: () => sc.kind === "budget" ? onOpenBudget(sc.id) : sc.kind === "savings" ? onRedistribute() : null,
+    className: "w-full flex items-center gap-2.5 rounded-2xl px-3.5 py-2.5 transition-transform active:scale-[0.99]",
+    style: field
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[17px]"
+  }, sc.emoji), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1 text-right text-[13.5px] font-semibold",
+    style: {
+      color: INK
+    }
+  }, sc.name), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13.5px] font-bold tabular-nums",
+    style: {
+      color: GREEN
+    }
+  }, shekel(sc.amount))))), /*#__PURE__*/React.createElement("div", {
+    className: "text-[12px] text-center mb-4",
+    style: {
+      color: covers ? "#1a7048" : "#8a5a00"
+    }
+  }, covers ? `יש מספיק מקורות לפינוי ${shekel(needed)}.` : `סך המקורות הזמינים הוא ${shekel(total)} — פחות מהפער הנדרש.`)),
+  // פעולות
+  /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, Btn(`ערוך תקציב ${rec.budgetName}`, onEditBudget, true), Btn("השאר למעקב", onClose)));
+}
+function BudgetCalibrationSheet({
+  rec,
+  onEditBudget,
+  onRebalance,
+  onBack,
+  onClose
+}) {
+  if (!rec) return null;
+  const up = rec.direction === "increase";
+  const Line = (label, val, strong) => /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between rounded-2xl px-4 py-3",
+    style: strong ? {
+      background: "rgba(47,111,237,0.09)"
+    } : field
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold",
+    style: {
+      color: strong ? GREEN : "#78716c"
+    }
+  }, label), /*#__PURE__*/React.createElement("span", {
+    className: "text-[15px] font-bold tabular-nums",
+    style: {
+      color: strong ? GREEN : INK
+    }
+  }, shekel(val)));
+  const Btn = (label, onClick, primary) => /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    className: "w-full rounded-2xl h-11 font-bold text-[14px] transition-transform active:scale-[0.99]",
+    style: primary ? {
+      background: greenGrad,
+      color: "#fff"
+    } : {
+      ...field,
+      color: GREEN
+    }
+  }, label);
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: `התאמת תקציב ${rec.budgetName}`,
+    subtitle: up ? "המסגרת נמוכה מהשימוש בפועל" : "נשאר עודף קבוע בתקציב",
+    onBack: onBack,
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-[13px] leading-relaxed text-center px-1 mb-4",
+    style: {
+      color: "#57534e"
+    }
+  }, up ? `בחודשיים האחרונים ${rec.budgetName} חרג מהתקציב. המסגרת הנוכחית היא ${shekel(rec.currentLimit)}, אבל השימוש בפועל קרוב יותר ל-${shekel(rec.avgSpent)}.` : `בחודשיים האחרונים נשאר עודף קבוע ב${rec.budgetName}. המסגרת הנוכחית היא ${shekel(rec.currentLimit)}, והשימוש בפועל קרוב יותר ל-${shekel(rec.avgSpent)}.`), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2 mb-4"
+  }, Line("המסגרת הנוכחית", rec.currentLimit), Line("שימוש ממוצע", rec.avgSpent), Line("מסגרת מומלצת", rec.recommendedLimit, true)), !rec.healthy && /*#__PURE__*/React.createElement("div", {
+    className: "rounded-2xl px-4 py-3 mb-4 text-[12.5px] font-semibold leading-relaxed text-center",
+    style: {
+      background: "rgba(245,158,11,0.10)",
+      color: "#8a5a00"
+    }
+  }, up ? "מאחר שהחודש כבר צפויה חריגה, כדאי לאזן לפני שמגדילים את התקציב." : "החודש צפויה חריגה — הפחתת המסגרת יכולה לפנות כסף למרווח החודשי."), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, rec.healthy ? /*#__PURE__*/React.createElement(React.Fragment, null, Btn("עדכון תקציב", onEditBudget, true), Btn("השאר למעקב", onClose)) : /*#__PURE__*/React.createElement(React.Fragment, null, Btn("פתח איזון חכם", onRebalance, true), Btn(`ערוך תקציב ${rec.budgetName}`, onEditBudget), Btn("השאר למעקב", onClose))));
 }
 function ReserveDetailSheet({
   data,
@@ -13536,6 +13894,19 @@ function App() {
     expenses: true
   });
   const [modal, setModal] = useState(null);
+  // מחסנית Sheets — Sheet שנפתח מתוך Sheet אחר מקבל כפתור חזרה גנרי
+  const [modalStack, setModalStack] = useState([]);
+  const pushModal = next => {
+    setModalStack(st => modal ? [...st, modal] : st);
+    setModal(next);
+  };
+  const goBack = () => {
+    setModalStack(st => {
+      if (!st.length) return st;
+      setModal(st[st.length - 1]);
+      return st.slice(0, -1);
+    });
+  };
   const [toast, setToast] = useState(null);
   const [viewSeq, setViewSeq] = useState(0); // עולה בכל החלפת משתמש → מפעיל אנימציית כניסה
   const [enterBase, setEnterBase] = useState(0); // השהיה בסיסית (משתמש≈220, חודש=0)
@@ -13764,6 +14135,7 @@ function App() {
   };
   const closeModal = () => {
     setClosing(true);
+    setModalStack([]);
     setTimeout(() => {
       setModal(null);
       setClosing(false);
@@ -13905,6 +14277,17 @@ function App() {
         if (b) setModal({
           type: "budgetDetail",
           budget: b
+        });
+      } else if (act.kind === "editBudget") {
+        const b = budgetOf(act.id);
+        if (b) setModal({
+          type: "budgetForm",
+          editing: b
+        });
+      } else if (act.kind === "calibration") {
+        setModal({
+          type: "calibration",
+          budgetId: act.id
         });
       } else if (act.kind === "cat") {
         const c = catOf(act.id);
@@ -14580,7 +14963,7 @@ function App() {
     showToast("המשתמש " + nm + " נמחק");
   };
   const catStats = c => {
-    const buds = (data.budgets || []).filter(b => b.catId === c.id && !(b.onlyMonth && b.onlyMonth !== ym));
+    const buds = (data.budgets || []).filter(b => b.catId === c.id && !(b.onlyMonth && b.onlyMonth !== ym) && !(b.endYm && ymIndex(ym) >= ymIndex(b.endYm)));
     const unb = calc.active.filter(e => !e.budgetId && e.catId === c.id);
     const budTotal = buds.reduce((s, b) => s + (calc.usedByBudget[b.id] || 0), 0);
     const total = budTotal + unb.reduce((s, e) => s + (+e.amount || 0), 0);
@@ -15278,6 +15661,7 @@ function App() {
   }), modal?.type === "budgetDelete" && /*#__PURE__*/React.createElement(BudgetDeleteDialog, {
     budget: modal.budget,
     data: data,
+    ym: ym,
     count: data.expenses.filter(e => e.budgetId === modal.budget.id).length,
     onMove: t => doDeleteBudget(modal.budget.id, "move", t),
     onUnbudget: () => doDeleteBudget(modal.budget.id, "unbudget"),
@@ -15764,11 +16148,12 @@ function App() {
   }), modal?.type === "ringDetail" && /*#__PURE__*/React.createElement(RingDetail, {
     ring: modal.ring,
     budgetId: modal.budgetId,
+    onBack: modalStack.length ? goBack : undefined,
     calc: calc,
     mode: mode,
     ym: ym,
     data: data,
-    onOpenBudget: b => setModal({
+    onOpenBudget: b => pushModal({
       type: "budgetDetail",
       budget: b
     }),
@@ -15802,6 +16187,7 @@ function App() {
     })
   }), modal?.type === "budgetDetail" && /*#__PURE__*/React.createElement(BudgetDetail, {
     budget: (data.budgets || []).find(b => b.id === modal.budget.id) || modal.budget,
+    onBack: modalStack.length ? goBack : undefined,
     data: data,
     calc: calc,
     onEditExpense: e => setModal({
@@ -15813,7 +16199,7 @@ function App() {
       editing: (data.budgets || []).find(b => b.id === modal.budget.id) || modal.budget
     }),
     onQuickAdd: () => openQuickAdd(modal.budget),
-    onOpenPace: b => setModal({
+    onOpenPace: b => pushModal({
       type: "ringDetail",
       ring: "closest",
       budgetId: b.id
@@ -15850,6 +16236,7 @@ function App() {
     onDelete: requestDeleteCat,
     onClose: closeModal
   }), modal?.type === "redistribute" && /*#__PURE__*/React.createElement(RedistributeSheet, {
+    onBack: modalStack.length ? goBack : undefined,
     data: data,
     calc: calc,
     ym: ym,
@@ -15867,6 +16254,43 @@ function App() {
     onRedistribute: () => setModal({
       type: "redistribute"
     }),
+    onClose: closeModal
+  }), modal?.type === "calibration" && /*#__PURE__*/React.createElement(BudgetCalibrationSheet, {
+    rec: getBudgetCalibration(data, ym, calc).find(r => r.budgetId === modal.budgetId),
+    onEditBudget: () => {
+      const b = budgetOf(modal.budgetId);
+      if (b) pushModal({
+        type: "budgetForm",
+        editing: b
+      });
+    },
+    onRebalance: () => pushModal({
+      type: "calibrationRebalance",
+      budgetId: modal.budgetId
+    }),
+    onBack: modalStack.length ? goBack : undefined,
+    onClose: closeModal
+  }), modal?.type === "calibrationRebalance" && /*#__PURE__*/React.createElement(BudgetRebalanceSheet, {
+    rec: getBudgetCalibration(data, ym, calc).find(r => r.budgetId === modal.budgetId),
+    sources: getRebalanceSources(calc, ym, data, modal.budgetId),
+    onOpenBudget: id => {
+      const b = budgetOf(id);
+      if (b) pushModal({
+        type: "budgetDetail",
+        budget: b
+      });
+    },
+    onEditBudget: () => {
+      const b = budgetOf(modal.budgetId);
+      if (b) pushModal({
+        type: "budgetForm",
+        editing: b
+      });
+    },
+    onRedistribute: () => pushModal({
+      type: "redistribute"
+    }),
+    onBack: modalStack.length ? goBack : undefined,
     onClose: closeModal
   }), modal?.type === "reserveDetail" && /*#__PURE__*/React.createElement(ReserveDetailSheet, {
     data: data,
