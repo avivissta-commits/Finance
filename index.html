@@ -13462,29 +13462,30 @@ function BudgetRebalanceSheet({
     // 1) יתרה פנויה  2) חיסכון
     list.filter(x => x.kind === "margin").forEach(takeFrom);
     list.filter(x => x.kind === "savings").forEach(takeFrom);
-    // 3) תקציבים גמישים — חלוקה יחסית לפי מה שאפשר לפנות מכל אחד
-    const buds = list.filter(x => x.kind === "budget" && capOf(x) > 0);
+    // 3) תקציבים גמישים — חלוקה יחסית. מקור זניח (<20) לא משתתף.
+    const buds = list.filter(x => x.kind === "budget" && capOf(x) >= 20);
     if (left > 0 && buds.length) {
       const totalAvail = buds.reduce((a, x) => a + capOf(x), 0);
-      const R = 5; // עיגול לסכומים נוחים
+      // עיגול נעים לפי גודל הסכום
+      const R = left >= 2000 ? 50 : left >= 800 ? 20 : left >= 200 ? 10 : 5;
       const draft = buds.map(sc => {
         const raw = left * (capOf(sc) / totalAvail);
         return {
           sc,
           amt: Math.min(capOf(sc), Math.floor(raw / R) * R),
-          raw
+          raw,
+          cap: capOf(sc)
         };
       });
-      let assigned = draft.reduce((a, x) => a + x.amt, 0);
-      // חלוקת השארית מהעיגול — לפי גודל החלק היחסי, בכפוף לתקרה
-      let rest = Math.min(left, needed) - assigned;
-      const order = [...draft].sort((a, b) => b.raw - a.raw);
+      // חלוקת שארית העיגול לפי גודל החלק היחסי, בכפוף לתקרה
+      const byShare = [...draft].sort((a, b) => b.raw - a.raw);
+      let rest = left - draft.reduce((a, x) => a + x.amt, 0);
       let guard = 0;
-      while (rest >= R && guard < 200) {
+      while (rest >= R && guard < 300) {
         let moved = false;
-        for (const d of order) {
+        for (const d of byShare) {
           if (rest < R) break;
-          if (d.amt + R <= capOf(d.sc)) {
+          if (d.amt + R <= d.cap) {
             d.amt += R;
             rest -= R;
             moved = true;
@@ -13492,6 +13493,18 @@ function BudgetRebalanceSheet({
         }
         if (!moved) break;
         guard++;
+      }
+      // תיקון שארית קטנה — על המקור עם הכי הרבה מקום פנוי, בלי לחרוג
+      if (rest > 0) {
+        const byRoom = [...draft].sort((a, b) => b.cap - b.amt - (a.cap - a.amt));
+        for (const d of byRoom) {
+          if (rest <= 0) break;
+          const room = Math.min(rest, d.cap - d.amt);
+          if (room > 0) {
+            d.amt += room;
+            rest -= room;
+          }
+        }
       }
       draft.forEach(d => {
         if (d.amt > 0) {
