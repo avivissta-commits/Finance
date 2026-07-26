@@ -57,6 +57,47 @@
     @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} button:active{transform:none!important} }
     .no-sb{ scrollbar-width:none; -ms-overflow-style:none; }
     .no-sb::-webkit-scrollbar{ width:0; height:0; display:none; }
+
+    /* ==================== אנימציית כניסה מסך "החודש" — כל התזמון מרוכז כאן ==================== */
+    /* --eb = enterBase (מוזרק inline, 0 רגיל / 220 בהחלפת משתמש). --es = קיצור פרופורציונלי של כל הטיימליין. */
+    /* לקיצור מהיר בהמשך: שנה את --es ל-0.4 בערך. לעידון פר-אלמנט: שנה את ה-animation-delay של המחלקה. */
+    .month-enter-root{ --es: 1; }
+    @keyframes enterCard  { from{ opacity:0; transform:translateY(24px) scale(.97); } to{ opacity:1; transform:none; } }
+    @keyframes enterInner { from{ opacity:0; transform:translateY(12px); }            to{ opacity:1; transform:translateY(0); } }
+    @keyframes enterRing  { from{ opacity:0; transform:translateY(10px) scale(.82); } to{ opacity:1; transform:none; } }
+    /* אנימציית עדכון רשימה (מיון/סינון/חיפוש) — קצרה וישירה, מתחילה מיד */
+    @keyframes enterListUpdate { from{ opacity:0; transform:translateY(12px) scale(.99); } to{ opacity:1; transform:none; } }
+
+    /* — כרטיס הדשבורד הראשי — קצב ברור אך מהיר — */
+    .dashboard-card-shell        { animation: enterCard  .26s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 0ms)    * var(--es,1)); }
+    .dashboard-toggle-enter      { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 70ms)   * var(--es,1)); }
+    .dashboard-income-row-enter  { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 150ms)  * var(--es,1)); }
+    .dashboard-budgeted-row-enter{ animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 220ms)  * var(--es,1)); }
+    .dashboard-unbudgeted-row-enter{ animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 280ms) * var(--es,1)); }
+    /* — כרטיס כחול — */
+    .dashboard-blue-card-enter   { animation: enterCard  .26s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 350ms)  * var(--es,1)); }
+    /* המספר הגדול נכנס ב-450ms; הגלגול (RollNumber/RollDigit הקיים) מופעל ב-JS באותו זמן */
+    .dashboard-blue-number-enter { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 450ms)  * var(--es,1)); }
+    .dashboard-blue-chip-enter   { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 500ms)  * var(--es,1)); }
+    .dashboard-saving-row-enter  { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 550ms)  * var(--es,1)); }
+
+    /* — כרטיסיית הרינגים — מהיר, אחד אחרי השני עם overlap (stagger ~60ms < משך .20s) — */
+    .rings-card-shell    { animation: enterCard .26s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 620ms)  * var(--es,1)); }
+    .ring-item-0-enter   { animation: enterRing .20s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 680ms)  * var(--es,1)); }
+    .ring-item-1-enter   { animation: enterRing .20s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 740ms)  * var(--es,1)); }
+    .ring-item-2-enter   { animation: enterRing .20s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 790ms)  * var(--es,1)); }
+    /* רינג רביעי ואילך (עמוד עם >3 רינגים) — ממשיך אחרי השלישי כדי שלא יופיע יחד */
+    .ring-item-3-enter   { animation: enterRing .20s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 850ms)  * var(--es,1)); }
+    .carousel-dots-enter { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 880ms)  * var(--es,1)); }
+
+    /* — חיפוש, מיון, רשימה — הכי מהיר, כמו גל (מרווחים ~40-60ms, list stagger 25ms) — */
+    .filter-button-enter { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 930ms)  * var(--es,1)); }
+    .search-input-enter  { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 970ms)  * var(--es,1)); }
+    .sort-row-enter      { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1020ms) * var(--es,1)); }
+    /* --ci = אינדקס הכרטיס (מוגבל ל-5 → max accumulated 125ms), stagger 25ms; הרשימה לא נמשכת */
+    .category-card-enter { animation: enterInner .16s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1080ms + var(--ci,0) * 25ms) * var(--es,1)); }
+    /* עדכון רשימה בלבד: מתחיל מיד (בלי דיליי הטיימליין), stagger 80ms, משך .24s */
+    .category-card-update { animation: enterListUpdate .24s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc(var(--ci,0) * 80ms); }
   </style>
 </head>
 <body>
@@ -3034,6 +3075,28 @@ function MonthCard({
   const endTotal = Math.max(0, calc.projected); // חודש שהסתיים: סה״כ נשאר (כולל מה שנשמר לחיסכון)
   const over = actual ? calc.remainingNow < 0 : monthEnded ? calc.projected < -0.5 : netAvail < 0;
   const mainVal = actual ? calc.remainingNow : monthEnded ? calc.projected < -0.5 ? calc.projected : endTotal : netAvail;
+  // גלגול המספר הגדול בכניסת הכרטיס הכחול: מזין ל-RollNumber הקיים ערך שמשתנה (0 → mainVal)
+  // בזמן הופעת המספר (~450ms), כדי שה-digit-roll הקיים ירוץ. לא נוגע בערך/בחישוב (הערך הסופי = mainVal),
+  // ולא ב-RollNumber/RollDigit. שינויי ערך שוטפים (טוגל מצב/חודש) מתגלגלים מיד כמו קודם.
+  const [blueDisp, setBlueDisp] = useState(0);
+  const blueFirstRef = useRef(true);
+  useEffect(() => {
+    if (!blueFirstRef.current) {
+      setBlueDisp(mainVal);
+      return;
+    }
+    blueFirstRef.current = false;
+    let reduce = false;
+    try {
+      reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch (e) {}
+    if (reduce) {
+      setBlueDisp(mainVal);
+      return;
+    }
+    const t = setTimeout(() => setBlueDisp(mainVal), 450);
+    return () => clearTimeout(t);
+  }, [mainVal]);
   const label = monthEnded && !actual ? over ? "החודש הסתיים במינוס" : "החודש הסתיים עם" : isFuture ? over ? `חריגה צפויה בסוף ${monthNameOf(ym)}` : `צפוי להישאר בסוף ${monthNameOf(ym)}` : actual ? "נשאר כרגע" : over ? "צפי חריגה בסוף החודש" : "מרווח צפוי בסוף החודש";
   const daysLeftInMonth = (() => {
     if (mState !== "current") return 0;
@@ -3088,6 +3151,8 @@ function MonthCard({
   return /*#__PURE__*/React.createElement("div", {
     className: "rounded-3xl p-4",
     style: glass()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dashboard-toggle-enter"
   }, mState !== "current" ? /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-center gap-1.5 rounded-2xl h-9 text-[13px] font-bold",
     style: {
@@ -3104,12 +3169,12 @@ function MonthCard({
       k: "projected",
       label: "צפי סוף חודש"
     }]
-  }), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     className: "space-y-1.5 my-3"
   }, rows.map((r, i) => r.edit ? /*#__PURE__*/React.createElement("button", {
     key: i,
     onClick: onEditIncome,
-    className: "w-full flex items-center justify-between text-[14px]"
+    className: "w-full flex items-center justify-between text-[14px] " + (i === 0 ? "dashboard-income-row-enter" : i === 1 ? "dashboard-budgeted-row-enter" : "dashboard-unbudgeted-row-enter")
   }, /*#__PURE__*/React.createElement("span", {
     className: "flex items-center gap-1 font-semibold",
     style: {
@@ -3137,7 +3202,7 @@ function MonthCard({
     n: Math.abs(r.v)
   }), /*#__PURE__*/React.createElement("span", null, "₪"))) : /*#__PURE__*/React.createElement("div", {
     key: i,
-    className: "flex items-center justify-between text-[14px]"
+    className: "flex items-center justify-between text-[14px] " + (i === 0 ? "dashboard-income-row-enter" : i === 1 ? "dashboard-budgeted-row-enter" : "dashboard-unbudgeted-row-enter")
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-stone-600"
   }, r.k), /*#__PURE__*/React.createElement("span", {
@@ -3147,7 +3212,9 @@ function MonthCard({
     }
   }, r.v < 0 && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: Math.abs(r.v)
-  }), /*#__PURE__*/React.createElement("span", null, "₪"))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, "₪"))))), /*#__PURE__*/React.createElement("div", {
+    className: "dashboard-blue-card-enter"
+  }, /*#__PURE__*/React.createElement("div", {
     onClick: onForecast,
     className: "rounded-2xl px-3.5 py-3 flex items-center justify-between w-full cursor-pointer transition-transform active:scale-[0.99]",
     style: {
@@ -3163,16 +3230,16 @@ function MonthCard({
       animation: "cardIn .3s ease both"
     }
   }, label), /*#__PURE__*/React.createElement("div", {
-    className: "font-bold text-[21px] leading-tight flex items-center gap-1",
+    className: "dashboard-blue-number-enter font-bold text-[21px] leading-tight flex items-center gap-1",
     style: {
       color: "#fff"
     }
   }, over && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
-    n: mainVal
+    n: blueDisp
   }), /*#__PURE__*/React.createElement("span", {
     className: "text-[15px]"
   }, "₪"))), /*#__PURE__*/React.createElement("span", {
-    className: "rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap self-center",
+    className: "dashboard-blue-chip-enter rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap self-center",
     style: {
       background: "rgba(255,255,255,0.2)",
       color: "#fff"
@@ -3250,7 +3317,7 @@ function MonthCard({
     }
     return /*#__PURE__*/React.createElement("button", {
       onClick: onEditGoal,
-      className: "w-full mt-2 rounded-2xl px-3 py-2 flex items-center justify-between transition-transform active:scale-[0.99]",
+      className: "dashboard-saving-row-enter w-full mt-2 rounded-2xl px-3 py-2 flex items-center justify-between transition-transform active:scale-[0.99]",
       style: {
         background: gt.bg,
         border: `1.5px solid ${gt.bc}`
@@ -4682,8 +4749,15 @@ function Carousel({
     style: {
       flexShrink: 0
     }
-  }, (pg || []).map((r, i) => /*#__PURE__*/React.createElement(Ring, {
+  }, (pg || []).map((r, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
+    className: "ring-item-" + Math.min(i, 3) + "-enter",
+    style: {
+      flex: "1 1 0%",
+      minWidth: 0,
+      display: "flex"
+    }
+  }, /*#__PURE__*/React.createElement(Ring, {
     size: 74,
     stroke: 7,
     block: true,
@@ -4693,10 +4767,10 @@ function Carousel({
       if (movedRef.current) return;
       r.open != null && onRing && onRing(r.open);
     }
-  })));
+  }))));
   if (n <= 1) {
     return /*#__PURE__*/React.createElement("div", {
-      className: "rounded-3xl py-4",
+      className: "rings-card-shell rounded-3xl py-4",
       style: glass()
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -4793,7 +4867,7 @@ function Carousel({
   }; // מעבר לעמוד i (0-based)
 
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    className: "rounded-3xl py-4",
+    className: "rings-card-shell rounded-3xl py-4",
     style: glass()
   }, /*#__PURE__*/React.createElement("div", {
     ref: wrapRef,
@@ -4817,7 +4891,7 @@ function Carousel({
       flexShrink: 0
     }
   }, renderPage(pg, pi)))))), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-center items-center gap-1.5 mt-3",
+    className: "carousel-dots-enter flex justify-center items-center gap-1.5 mt-3",
     style: {
       height: 14
     }
@@ -14103,6 +14177,14 @@ function App() {
   const [toast, setToast] = useState(null);
   const [viewSeq, setViewSeq] = useState(0); // עולה בכל החלפת משתמש → מפעיל אנימציית כניסה
   const [enterBase, setEnterBase] = useState(0); // השהיה בסיסית (משתמש≈220, חודש=0)
+  // מחזור כניסה למסך "החודש": עולה רק במעבר קטגוריות→החודש (לא בטעינה הראשונה, כדי למנוע double-mount).
+  // משולב במפתח תוכן החודש כדי להריץ מחדש את אנימציות הכניסה (CSS) בכל חזרה לטאב. UI בלבד.
+  const [monthEnterCycle, setMonthEnterCycle] = useState(0);
+  const prevTabRef = useRef("home");
+  useEffect(() => {
+    if (tab === "home" && prevTabRef.current !== "home") setMonthEnterCycle(c => c + 1);
+    prevTabRef.current = tab;
+  }, [tab]);
   const [savedAt, setSavedAt] = useState(() => Date.now());
   const [saveOk, setSaveOk] = useState(true);
   const [syncStatus, setSyncStatus] = useState({
@@ -14132,6 +14214,33 @@ function App() {
   const [pageDir, setPageDir] = useState(0);
   const [closing, setClosing] = useState(false);
   const [filter, setFilter] = useState(defaultFilter);
+  // הפרדת אנימציות רשימה: "enter" = טיימליין מלא (כניסה למסך), "update" = אנימציה קצרה רק לרשימה
+  // (מיון/סינון/חיפוש). gen מזוהה במפתח הכרטיסים כדי לגרום ל-remount+אנימציה. UI בלבד — לא נוגע בדאטה/חישוב.
+  const [listAnim, setListAnim] = useState({
+    mode: "enter",
+    gen: 0
+  });
+  const listSigRef = useRef({
+    e: null,
+    l: null
+  });
+  const enterSig = tab + "|" + ym + "|" + viewSeq + "|" + monthEnterCycle; // משתנה בכל כניסה למסך (טאב/חודש/משתמש)
+  const listSig = [filter.query, filter.cat, filter.type, filter.status, filter.catSort, filter.expSort].join("|"); // משתנה בכל שינוי חיפוש/סינון/מיון
+  useLayoutEffect(() => {
+    const w = listSigRef.current;
+    const eChanged = w.e !== enterSig;
+    const lChanged = w.l !== listSig;
+    w.e = enterSig;
+    w.l = listSig;
+    // כניסה למסך (טאב/חודש/משתמש) → טיימליין מלא. מקבל עדיפות על שינוי-רשימה שקורה יחד (למשל reset בהחלפת משתמש).
+    if (eChanged) setListAnim(a => ({
+      mode: "enter",
+      gen: a.gen + 1
+    }));else if (lChanged) setListAnim(a => ({
+      mode: "update",
+      gen: a.gen + 1
+    }));
+  }, [enterSig, listSig]);
   const [searchFocused, setSearchFocused] = useState(false);
   const [activeTag, setActiveTag] = useState(null);
   // חיפושים אחרונים — עד 3, פר-משתמש, נשמרים בנתוני המשתמש (שדה תוסף)
@@ -15308,19 +15417,18 @@ function App() {
     count: unreadCount,
     onClick: openInsights
   }))), tab === "home" && /*#__PURE__*/React.createElement("div", {
-    key: "home:" + ym + ":" + viewSeq,
+    key: "home:" + ym + ":" + viewSeq + ":" + monthEnterCycle,
+    className: "month-enter-root",
     style: {
       display: "flex",
       flexDirection: "column",
-      gap: "36px"
+      gap: "36px",
+      "--eb": enterBase + "ms"
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "space-y-3"
   }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      animation: "staggerUp .36s cubic-bezier(.22,.61,.36,1) both",
-      animationDelay: enterBase + 60 + "ms"
-    }
+    className: "dashboard-card-shell"
   }, /*#__PURE__*/React.createElement(MonthCard, {
     calc: calc,
     ym: ym,
@@ -15336,12 +15444,7 @@ function App() {
     onForecast: () => setModal({
       type: "forecastDetail"
     })
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      animation: "staggerUp .36s cubic-bezier(.22,.61,.36,1) both",
-      animationDelay: enterBase + 120 + "ms"
-    }
-  }, /*#__PURE__*/React.createElement(RingsCarousel, {
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(RingsCarousel, {
     calc: calc,
     data: data,
     ym: ym,
@@ -15358,15 +15461,11 @@ function App() {
       cat: o.cat
     })
   }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "mb-[18px]",
-    style: {
-      animation: "staggerUp .36s cubic-bezier(.22,.61,.36,1) both",
-      animationDelay: enterBase + 180 + "ms"
-    }
+    className: "mb-[18px]"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "flex-1 flex items-center gap-2 rounded-2xl px-3 h-11",
+    className: "search-input-enter flex-1 flex items-center gap-2 rounded-2xl px-3 h-11",
     style: field
   }, /*#__PURE__*/React.createElement("svg", {
     width: "17",
@@ -15430,7 +15529,7 @@ function App() {
       type: "filter"
     }),
     "aria-label": "סינון",
-    className: "shrink-0 relative grid place-items-center rounded-2xl h-11 w-11 transition-transform active:scale-95",
+    className: "filter-button-enter shrink-0 relative grid place-items-center rounded-2xl h-11 w-11 transition-transform active:scale-95",
     style: {
       ...field,
       ...(filterActive ? {
@@ -15528,7 +15627,7 @@ function App() {
       d: "M10 11v6M14 11v6"
     }))), /*#__PURE__*/React.createElement("span", null, t));
   }))), !filter.cat && /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between px-1 mb-3"
+    className: "sort-row-enter flex items-center justify-between px-1 mb-3"
   }, /*#__PURE__*/React.createElement(SortDropdown, {
     options: [{
       k: "manual",
@@ -15730,12 +15829,11 @@ function App() {
         borderTop: "1px solid rgba(122,134,158,0.13)"
       };
       return /*#__PURE__*/React.createElement("div", {
-        key: (filter.catSort || "manual") + "|" + cat.id,
-        className: "rounded-3xl px-6 pt-5 pb-2",
+        key: cat.id + "|" + listAnim.gen,
+        className: (listAnim.mode === "enter" ? "category-card-enter" : "category-card-update") + " rounded-3xl px-6 pt-5 pb-2",
         style: {
           ...glass(),
-          animation: "staggerUp .38s cubic-bezier(.22,.61,.36,1) both",
-          animationDelay: `${Math.min(enterBase + 240 + gi * 95, enterBase + 1100)}ms`
+          "--ci": Math.min(gi, 5)
         }
       }, /*#__PURE__*/React.createElement("div", {
         className: "flex items-start justify-between gap-3 mb-3"
