@@ -68,6 +68,12 @@
     /* אנימציית עדכון רשימה (מיון/סינון/חיפוש) — קצרה וישירה, מתחילה מיד */
     @keyframes enterListUpdate { from{ opacity:0; transform:translateY(12px) scale(.99); } to{ opacity:1; transform:none; } }
 
+    /* — שורות שמופיעות רק ב"צפי סוף חודש" — התרחבות/כיווץ חלק של הכרטיס + הופעה/היעלמות של השורה — */
+    .ub-collapse{ display:grid; grid-template-rows:0fr; opacity:0; margin-top:0 !important;
+                  transition: grid-template-rows .34s cubic-bezier(.4,0,.2,1), opacity .26s ease; }
+    .ub-collapse[data-open="true"]{ grid-template-rows:1fr; opacity:1; }
+    .ub-inner{ overflow:hidden; min-height:0; padding-top:6px; }
+
     /* — כרטיס הדשבורד הראשי — קצב ברור אך מהיר — */
     .dashboard-card-shell        { animation: enterCard  .26s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 0ms)    * var(--es,1)); }
     .dashboard-toggle-enter      { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 70ms)   * var(--es,1)); }
@@ -3118,7 +3124,7 @@ function MonthCard({
     return "מרווח טוב";
   })();
   const chip = actual ? `נוצל ${Math.round(calc.pctActual)}% מההכנסה` : monthEnded || isFuture ? `${committedTone(calc).label} · ${Math.round(calc.pctCommitted)}% מההכנסה` : marginStatusChip;
-  const rows = actual ? [{
+  const baseRows = actual ? [{
     k: "הכנסה",
     v: calc.income,
     c: GREEN,
@@ -3137,44 +3143,23 @@ function MonthCard({
     v: -calc.targetsTotal,
     c: INK
   }];
-  const ubShown = actual ? calc.unbudgetedRealized : calc.unbudgeted;
-  if (ubShown > 0) rows.push({
+  // שורות שמופיעות רק ב"צפי סוף חודש". ב"הורדות בפועל" מוצג רק "יצא בפועל" (בלי "הוצאות לא מתוקצבות").
+  // השורות נבנות תמיד (ערכי הצפי) ומתקפלות ב-collapse ב"הורדות בפועל". לא נוגע בערכים/בחישוב.
+  const extraRows = [];
+  if (calc.unbudgeted > 0) extraRows.push({
     k: "הוצאות לא מתוקצבות",
-    v: -ubShown,
+    v: -calc.unbudgeted,
     c: INK
   });
-  if (!actual && calc.overspend > 0) rows.push({
+  if (calc.overspend > 0) extraRows.push({
     k: "חריגות מתקציבים",
     v: -calc.overspend,
     c: RED
   });
-  return /*#__PURE__*/React.createElement("div", {
-    className: "rounded-3xl p-4",
-    style: glass()
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dashboard-toggle-enter"
-  }, mState !== "current" ? /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-center gap-1.5 rounded-2xl h-9 text-[13px] font-bold",
-    style: {
-      background: "rgba(122,134,158,0.10)",
-      color: INK
-    }
-  }, monthEnded ? "📊 סיכום חודשי" : "📈 תחזית חודשית") : /*#__PURE__*/React.createElement(Segmented, {
-    value: mode,
-    onChange: onMode,
-    options: [{
-      k: "actual",
-      label: "הורדות בפועל"
-    }, {
-      k: "projected",
-      label: "צפי סוף חודש"
-    }]
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "space-y-1.5 my-3"
-  }, rows.map((r, i) => r.edit ? /*#__PURE__*/React.createElement("button", {
-    key: i,
+  const renderRow = (r, enterCls, key) => r.edit ? /*#__PURE__*/React.createElement("button", {
+    key: key,
     onClick: onEditIncome,
-    className: "w-full flex items-center justify-between text-[14px] " + (i === 0 ? "dashboard-income-row-enter" : i === 1 ? "dashboard-budgeted-row-enter" : "dashboard-unbudgeted-row-enter")
+    className: "w-full flex items-center justify-between text-[14px] " + enterCls
   }, /*#__PURE__*/React.createElement("span", {
     className: "flex items-center gap-1 font-semibold",
     style: {
@@ -3201,8 +3186,8 @@ function MonthCard({
   }, r.v < 0 && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: Math.abs(r.v)
   }), /*#__PURE__*/React.createElement("span", null, "₪"))) : /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "flex items-center justify-between text-[14px] " + (i === 0 ? "dashboard-income-row-enter" : i === 1 ? "dashboard-budgeted-row-enter" : "dashboard-unbudgeted-row-enter")
+    key: key,
+    className: "flex items-center justify-between text-[14px] " + enterCls
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-stone-600"
   }, r.k), /*#__PURE__*/React.createElement("span", {
@@ -3212,7 +3197,36 @@ function MonthCard({
     }
   }, r.v < 0 && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: Math.abs(r.v)
-  }), /*#__PURE__*/React.createElement("span", null, "₪"))))), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, "₪")));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-3xl p-4",
+    style: glass()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dashboard-toggle-enter"
+  }, mState !== "current" ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-1.5 rounded-2xl h-9 text-[13px] font-bold",
+    style: {
+      background: "rgba(122,134,158,0.10)",
+      color: INK
+    }
+  }, monthEnded ? "📊 סיכום חודשי" : "📈 תחזית חודשית") : /*#__PURE__*/React.createElement(Segmented, {
+    value: mode,
+    onChange: onMode,
+    options: [{
+      k: "actual",
+      label: "הורדות בפועל"
+    }, {
+      k: "projected",
+      label: "צפי סוף חודש"
+    }]
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-1.5 my-3"
+  }, baseRows.map((r, i) => renderRow(r, i === 0 ? "dashboard-income-row-enter" : "dashboard-budgeted-row-enter", i)), extraRows.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "ub-collapse",
+    "data-open": !actual ? "true" : "false"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ub-inner space-y-1.5"
+  }, extraRows.map((r, j) => renderRow(r, "dashboard-unbudgeted-row-enter", "x" + j))))), /*#__PURE__*/React.createElement("div", {
     className: "dashboard-blue-card-enter"
   }, /*#__PURE__*/React.createElement("div", {
     onClick: onForecast,
