@@ -74,6 +74,17 @@
     .ub-collapse[data-open="true"]{ grid-template-rows:1fr; opacity:1; }
     .ub-inner{ overflow:hidden; min-height:0; padding-top:6px; }
 
+    /* — כרטיסיית יעד החיסכון — מוצגת רק ב"צפי סוף חודש"; נכנסת/יוצאת בעדינות בלי חלל ריק — */
+    .goal-collapse{ display:grid; grid-template-rows:0fr; margin-top:0 !important;
+                    transition: grid-template-rows .20s cubic-bezier(.4,0,.2,1); }
+    .goal-collapse[data-open="true"]{ grid-template-rows:1fr;
+                    transition: grid-template-rows .26s cubic-bezier(.4,0,.2,1); }
+    .goal-inner{ overflow:hidden; min-height:0; padding-top:8px; }
+    .goal-fade{ opacity:0; transform:translateY(10px) scale(.98);
+                transition: opacity .2s ease, transform .2s cubic-bezier(.22,1,.36,1); }
+    .goal-collapse[data-open="true"] .goal-fade{ opacity:1; transform:none;
+                transition: opacity .26s ease, transform .26s cubic-bezier(.22,1,.36,1); }
+
     /* — כרטיס הדשבורד הראשי — קצב ברור אך מהיר — */
     .dashboard-card-shell        { animation: enterCard  .26s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 0ms)    * var(--es,1)); }
     .dashboard-toggle-enter      { animation: enterInner .15s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 70ms)   * var(--es,1)); }
@@ -3329,9 +3340,16 @@ function MonthCard({
       amount = intended;
       msg = monthEnded ? "הושג" : "הושג";
     }
-    return /*#__PURE__*/React.createElement("button", {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "goal-collapse",
+      "data-open": !actual ? "true" : "false"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "goal-inner"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "goal-fade"
+    }, /*#__PURE__*/React.createElement("button", {
       onClick: onEditGoal,
-      className: "dashboard-saving-row-enter w-full mt-2 rounded-2xl px-3 py-2 flex items-center justify-between transition-transform active:scale-[0.99]",
+      className: "dashboard-saving-row-enter w-full rounded-2xl px-3 py-2 flex items-center justify-between transition-transform active:scale-[0.99]",
       style: {
         background: gt.bg,
         border: `1.5px solid ${gt.bc}`
@@ -3361,7 +3379,7 @@ function MonthCard({
         background: gt.c,
         display: "inline-block"
       }
-    }), msg));
+    }), msg)))));
   })());
 }
 
