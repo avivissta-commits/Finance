@@ -61,7 +61,7 @@
     /* ==================== אנימציית כניסה מסך "החודש" — כל התזמון מרוכז כאן ==================== */
     /* --eb = enterBase (מוזרק inline, 0 רגיל / 220 בהחלפת משתמש). --es = קיצור פרופורציונלי של כל הטיימליין. */
     /* לקיצור מהיר בהמשך: שנה את --es ל-0.4 בערך. לעידון פר-אלמנט: שנה את ה-animation-delay של המחלקה. */
-    .month-enter-root{ --es: 0.8; }
+    .month-enter-root{ --es: 1; }
     @keyframes enterCard  { from{ opacity:0; transform:translateY(24px) scale(.97); } to{ opacity:1; transform:none; } }
     @keyframes enterInner { from{ opacity:0; transform:translateY(12px); }            to{ opacity:1; transform:translateY(0); } }
     @keyframes enterRing  { from{ opacity:0; transform:translateY(10px) scale(.82); } to{ opacity:1; transform:none; } }
@@ -70,7 +70,7 @@
 
     /* — שורות שמופיעות רק ב"צפי סוף חודש" — התרחבות/כיווץ חלק של הכרטיס + הופעה/היעלמות של השורה — */
     .ub-collapse{ display:grid; grid-template-rows:0fr; opacity:0; margin-top:0 !important;
-                  transition: grid-template-rows .34s cubic-bezier(.4,0,.2,1), opacity .26s ease; }
+                  transition: grid-template-rows .34s cubic-bezier(.4,0,.2,1), opacity .32s ease; }
     .ub-collapse[data-open="true"]{ grid-template-rows:1fr; opacity:1; }
     .ub-inner{ overflow:hidden; min-height:0; padding-top:6px; }
 
@@ -83,36 +83,36 @@
     .goal-fade{ opacity:0; transform:translateY(10px) scale(.98);
                 transition: opacity .2s ease, transform .2s cubic-bezier(.22,1,.36,1); }
     .goal-collapse[data-open="true"] .goal-fade{ opacity:1; transform:none;
-                transition: opacity .26s ease, transform .26s cubic-bezier(.22,1,.36,1); }
+                transition: opacity .32s ease, transform .26s cubic-bezier(.22,1,.36,1); }
 
     /* — כרטיס הדשבורד הראשי — קצב ברור, מעט יותר נשימה — */
-    .dashboard-card-shell        { animation: enterCard  .34s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 0ms)    * var(--es,1)); }
-    .dashboard-toggle-enter      { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 90ms)   * var(--es,1)); }
-    .dashboard-income-row-enter  { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 190ms)  * var(--es,1)); }
-    .dashboard-budgeted-row-enter{ animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 280ms)  * var(--es,1)); }
-    .dashboard-unbudgeted-row-enter{ animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 360ms) * var(--es,1)); }
+    .dashboard-card-shell        { animation: enterCard  .44s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 0ms)    * var(--es,1)); }
+    .dashboard-toggle-enter      { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 90ms)   * var(--es,1)); }
+    .dashboard-income-row-enter  { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 190ms)  * var(--es,1)); }
+    .dashboard-budgeted-row-enter{ animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 280ms)  * var(--es,1)); }
+    .dashboard-unbudgeted-row-enter{ animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 360ms) * var(--es,1)); }
     /* — כרטיס כחול — */
-    .dashboard-blue-card-enter   { animation: enterCard  .34s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 450ms)  * var(--es,1)); }
+    .dashboard-blue-card-enter   { animation: enterCard  .44s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 450ms)  * var(--es,1)); }
     /* המספר הגדול נכנס ב-590ms; הגלגול (RollNumber/RollDigit הקיים) מופעל ב-JS באותו זמן */
-    .dashboard-blue-number-enter { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 590ms)  * var(--es,1)); }
-    .dashboard-blue-chip-enter   { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 660ms)  * var(--es,1)); }
-    .dashboard-saving-row-enter  { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 710ms)  * var(--es,1)); }
+    .dashboard-blue-number-enter { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 590ms)  * var(--es,1)); }
+    .dashboard-blue-chip-enter   { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 660ms)  * var(--es,1)); }
+    .dashboard-saving-row-enter  { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 710ms)  * var(--es,1)); }
 
     /* — כרטיסיית הרינגים — אחד אחרי השני עם overlap (stagger ~80ms < משך .26s) — */
-    .rings-card-shell    { animation: enterCard .34s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 800ms)  * var(--es,1)); }
-    .ring-item-0-enter   { animation: enterRing .26s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 880ms)  * var(--es,1)); }
-    .ring-item-1-enter   { animation: enterRing .26s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 960ms)  * var(--es,1)); }
-    .ring-item-2-enter   { animation: enterRing .26s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 1030ms) * var(--es,1)); }
+    .rings-card-shell    { animation: enterCard .44s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 800ms)  * var(--es,1)); }
+    .ring-item-0-enter   { animation: enterRing .36s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 880ms)  * var(--es,1)); }
+    .ring-item-1-enter   { animation: enterRing .36s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 960ms)  * var(--es,1)); }
+    .ring-item-2-enter   { animation: enterRing .36s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 1030ms) * var(--es,1)); }
     /* רינג רביעי ואילך (עמוד עם >3 רינגים) — ממשיך אחרי השלישי כדי שלא יופיע יחד */
-    .ring-item-3-enter   { animation: enterRing .26s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 1110ms) * var(--es,1)); }
-    .carousel-dots-enter { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1140ms) * var(--es,1)); }
+    .ring-item-3-enter   { animation: enterRing .36s cubic-bezier(.22,1,.36,1) both;  animation-delay: calc((var(--eb,0ms) + 1110ms) * var(--es,1)); }
+    .carousel-dots-enter { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1140ms) * var(--es,1)); }
 
     /* — חיפוש, מיון, רשימה — זורם (list stagger 35ms) — */
-    .filter-button-enter { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1210ms) * var(--es,1)); }
-    .search-input-enter  { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1270ms) * var(--es,1)); }
-    .sort-row-enter      { animation: enterInner .20s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1320ms) * var(--es,1)); }
+    .filter-button-enter { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1210ms) * var(--es,1)); }
+    .search-input-enter  { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1270ms) * var(--es,1)); }
+    .sort-row-enter      { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1320ms) * var(--es,1)); }
     /* --ci = אינדקס הכרטיס (מוגבל ל-5 → max accumulated 175ms), stagger 35ms; הרשימה לא נמשכת */
-    .category-card-enter { animation: enterInner .21s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1400ms + var(--ci,0) * 35ms) * var(--es,1)); }
+    .category-card-enter { animation: enterInner .28s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 1400ms + var(--ci,0) * 35ms) * var(--es,1)); }
     /* עדכון רשימה בלבד: מתחיל מיד (בלי דיליי הטיימליין), stagger 80ms, משך .24s */
     .category-card-update { animation: enterListUpdate .24s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc(var(--ci,0) * 80ms); }
   </style>
