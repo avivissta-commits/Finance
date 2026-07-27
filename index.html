@@ -85,6 +85,13 @@
     .goal-collapse[data-open="true"] .goal-fade{ opacity:1; transform:none;
                 transition: opacity .40s ease, transform .26s cubic-bezier(.22,1,.36,1); }
 
+    /* — תפריט שלוש-הנקודות של קטגוריה (popover לבן) — */
+    .catmenu-row{ width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+                  padding:11px 12px; border-radius:12px; background:transparent; transition: background .13s ease; }
+    .catmenu-row:active{ transform: scale(0.98); }
+    @media (hover:hover){ .catmenu-row:hover{ background: rgba(47,111,237,0.07); } }
+    .catmenu-divider{ height:1px; background: rgba(122,134,158,0.14); margin:2px 8px; }
+
     /* — כרטיס הדשבורד הראשי — קצב ברור, מעט יותר נשימה — */
     .dashboard-card-shell        { animation: enterCard  .52s cubic-bezier(.22,1,.36,1) both;   animation-delay: calc((var(--eb,0ms) + 0ms)    * var(--es,1)); }
     .dashboard-toggle-enter      { animation: enterInner .36s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc((var(--eb,0ms) + 100ms)   * var(--es,1)); }
@@ -436,11 +443,197 @@ const GREEN = "#2f6fed",
   INK = "#44403c";
 const BLUE = "#2f6fed"; const PURPLE = "#6d4de0"; const EMERALD = "#17a05e";
 const POCKY_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJ8AAAAvCAYAAAD90RiVAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAOdEVYdFNvZnR3YXJlAEZpZ21hnrGWYwAAFrJJREFUeAHtXP12XEVyr+oZGTsBS1rYnJO/PH6BWM4LWNoXsPhYsH0WNDYfy9k/Ypv9yNqHRKPdLOawBNs5OTmcLKBRlhjBsqzIA+DhCZCfwKP8SdZIxt/S3K5UdVX3vVdfM5LNYmAKrLkzt2933+7q6vr9qu5FuEsZb9BQ9YHbI97BAQAaQYCaBxgCohoi8kcq2ubvl7nMVf655aD66R9+sWMe+vKdFYRtyhNnbo16ooPgqE6Ag8h/+D9ibcNQbTgu1C9HQRPDAX+gFFzg41ZGbmru1K429OU7JVtWPlG6jGiSdWtUFCgom3zmFSIVzJ18jfpmCoiqpVENrSxBc4dzU7N9JfzOSM/KN37mVq1CNM3KU1a6oFq5soneoUO1ccEKxpbsmoJwGTOTBd10rvHRqV1T0JdvvfSkfE++cmvCe3+Wiw8HSxU0DKNBK1s92U6JMBm/oF26BxevAygoXPGLSnug4sb6VvDbLa5bgcd+fWMyy/w0eRgO26lXmxa8O1KdChurZyPGSCOcJ9Uj1JKqdCRWDsOVXBfIv3DOPs38kX2vraz4zx5vfDkOffnWyqaW74e/uj7NejWBqh85mICCWQtapdYuBxq0pt5YJiBgMDCCudFzUf/UOqY6XKVS/+DlXTPQl23L46/dPM7j2uAhXXKeTv7x9F/PwX0gGyrf443r06wQdTLUmrbO5O8VFShtwJhXXIa7SV2Dh2hbs5UrwI51O0hQGfuwsasF25TxM9frDnBPUHHvValdMLqUjL/87hzxt08/PLX9tu43eeLMtVGPlU9smYufvuRv39k71xhegq9Zquv9+OTUjUk2QBOyXRYpFDNNUZ/Ubq0CHFFMu4RPse2WCnpI0ccLO3dsA0vUDMZyjF+yjw41bv39bGPrPuBjr9w8y3Uc1/Y9RIUnHxvzee9JBPDxV262uVTjj6e/+Ra346lWkaENO4/8QkM7H9g5xAdfu/Kt8fl++E/X65TRJGSmINJlLz6dmafg96lvBur5RZ/OfD0M1ziv6oTqB2LhWsBM93Epg9Hn0/pSXRh8SL2O/cOhzGcXxxuLQ7BF4XqOY+aVDMr7o+3ZPcix0zYB1a/dA5lvPvGbG5PwDReXOb3fTPcwJLhvpKR8bF1qrDqTBgDChAU/TcwB2Gc4p8eiHFoGw8SJUlLm1TqGsh4VQITrKAEMiMqo34O5kXZ8AjCg14vik3KDvIJ3+B3HYYsiSowKcCgck5nq+JnpPej5AJxEMVVZM2g8/uubW27z/hKvc0bx/uC+kZLy0Uo2yYNfU+UBs1SUlAQ8qvWzz7Bt+Wj91Kwrwg3XLHG5Nh8v6TVaZ9j++HoK1jMqNUS+ReMeshl79S2RMF+tmW/IAoEtSFgYBNGiyfd5VrhPud8t+eRzLf69xf2Q43Zu0YPnwNaZJrdjce8XqYT7ifNm83kH7gtJPp9MKq106pHxjVGKgE59MFWouFa5YT1tLl24xF/lbzNcfO52tTNfdGhl8nZ2qiOsUBN8yUEuPYzR7SPIYxyRKQRT0tAMFcogZXc603wwBr0KGe7xEez4kx82HmqtV1T6OUADzGcGf9f8TxquUvUEHzTgmyji4jgdSDSI13to4auVHHAsZ+rf5D4Bxb+qYGTIVD+SEiqEmlne0Tm5EYKy31vy79AvWcldRybzuK1HLEbfwJQ6OpyKZjCaYvl+QOqYfbVH8JEF6wohHMMzUK1sXFT6yQp4cocfGOeigwWIPwE9KN+hxrVRXmD72MiPsImp2R21+d+nlUqltR3AlOp+mVGrcwf4Hmo8DqFuRvBLvIVc4u2rNfsv6y+oID5aCKfGorJ5W5IssjO7Ng6VgQ37LGUGuEyFsL1p26vvgQGPqw7MS72hT0EhYOVycfpNotKFhaNKkPPB5hmefP/Mg+dgi3Lk9PURjpr8iWupFXmbnHYpusYpHkx6TFOzrw42emnnyZevlVxsNoBjH3YZrCdfFrTP8Ws068c1LA90hjdaXDKorONcHkbjGBFQMfZDOlQwg5XK1FaUMNUNeADR4uZhmCKXAPG71Nn44DcPlhD6odNf1r3D6XgfUtZVq3s36oPsgH4lu8hF9wRF9fToB2d2z61XhtuvhbvzeOL9Vx48D5sIz4PcQyMokoOFO5WV/cHnc5QdjH6R3JKBDAMYyfYEVEiGcANa3abiiVx45cF5NktjTnxDq898R0iREkXCmAOQSBi4f+i1nYCmFdmG/ld7ucbBfLh3n1A47by9c12/78nT1ybZLbnIvToQfOECmkZbTmjoncFY3S93Pjt86vqJHrqR6uYxGg3MlfeJGTCAZlGiwJvWeIymnzp9vQSQMgAdxyKrcHv99sQg0HJ2UepyaaxxcnU5voc6t7UnjQ9A9/vxXEbZBOTdqPbA8sBEUD7mvOpRycxHghK1ouhV91wDB3zN+fe2qXhRZl8dbvOqPoqmcGhOcVAvSIug4DAr38hlhg/98tpoT40oLcSKp8ADOt0vYeCFSEafR5C0zow9deraWZTIgVc7hExUK0VkIEwWUJYAG5kCDPHh2adOXd10wvj+JrmuhqH9Aj1Edk/5p7AKhmilbL1YTyXSSAQ54FhHRPEyok+YbK/lADMo4JqcS5eYAVDguHGMIAmXH0qhVF2Mw062XO7xiNCrFrHFEtXi0z+KFpFLtbHi70rxonzw2u45VuRWpF7Sxl9E0z5aRkiDjB0/0kv9GO+HTCl6EB7cg1iYbPmUhVIsc+Qfrx/n308oR1i0QgHdn8ewqOgo38MMT2g7Wu1YL3r3hkz4eu0f+vmXbFmgoVQT2sJh7lR3ifM8Ace4Xq7b/4rPtPJ+8o7mYbFUWQZJYRX5Sy/LC+nIz9niZf6iKITNORljMX9n58rJdbpouyK3p/feFcJEtgEiv8p/qriyMqKhC8Cyx6dYFM3hA4tHmDszNfvb8mTcneAUr95RiJDGwExsMoVUFHOQ7jPiX0H3BWC8lkYFuarK5uMUFmPWmdDycTCwVS6zWGN/9YSmJ8ZxEh2h8++/NrjaojWlPPrKWS47HhCUVew9CbIeW9sLClwrkc6JhX9mbu3K1gV1T/2CrShHpJzDIfSdl2DdMfAWoocS4Dj0MwZJwL63WCZISiDj27yzawMQaQAmT9vsTh5i2lUtvs/fq9zKvpBiEs7harCB0fvPqxAL4ltwD2X29YdaR356dZ5XxojyIcr3SV/Zr0SKvJvRPXINW4G/66lyD7Ey9cs32XZ/xBORrSxPax8wcT0c8i058dCpTmBAnJQPDGHj/dd3T617f2o1Hz30sy8v8iWjhtrl44C0+e7rOQASqydZPWqldaK4rbn3Xtt9dINuAyu8LMINF6IqMhqJyrWZ4Tv80+sTPEDTMcE3lQWamX19cMP2nBfn1gXCFsIndt9RfLQmOh/SWjWQyon6WZ3siZQGCnSVszK0/vvcvbR6qXOf8t8RizxAmtgIcMI0iKg19kQ9Eb/JF0o34S8eeenLHFPnf3nnUZ5Hl7RZNKCFC78dbBbrdOTHc5QZPi+/968PTXXtTCc7is5djshdJiEDZN4z0FBadxaehUnYX7SfrexJ2KZwfaEtBymXI8jhk6x4lDV1bFCjTHpq6r03ujAJgTP1ZpjEJ8Cu224IMgRBM5mOHB/WErjwKQRGudOfb3e2zVyFr0LIz0OM75b6YauSLJDCCsKxZ+lNb8oX6gyOPwXOz9v+6xXBK6ggs7bqHzqy9ezpKiPM0rZYP7HIW5ssEjCQJGCJ/qeXvszyomVs0IrIPRDAmT9YKiTW3xd9VWzN3s1izxG7IWRhOtwEuznTKZ6eCQMYCk9deKMHCss7KsxVsATdLknYIUbP2Ho62XITuJC5zs1jCq2ROrPRaW/DVyAVcURS7FgAnFJjadDiuSKA6EEiJZEjLfuu4TNFbBmsTTgQ4AB+bPXEL/NipQgabIzYEvacH8cO+jxYewqosFbuL4wkSiQstOwS3K2QzZ8hZxTCPCJkUwj++eMLbww3eqnOQYjZUz4G3QFH2sGCEgqQ8lwPRQhMAEkzKYflnpKFCDwWrEJT90h8lg05wLzNaJ5jZrRNtDrgIQGgt5SgQgw5oWZLMgClIZJ1V+9F6sVmhn7/hXPDa2kGqA4lyiMzyqMH+iYK77NL2pdAAQWkXDofd3ybXLZSdzXelSwrZvCkY4xxerP8jJIPHPnJYk8MgigOFjOVuhs+TfCIWW1G91R58IdCL3yM02IJ2UYHP7L96HuzOFsVrv5AbDPC3OSqGVBN2TCBc8HLvdWroQD1U8Tqsf+EoEpFBb+Pwpgu7dgB7ea53RsqdnW5s9RxyYFE84u3kHjgg7tUAHOrTtvDfgR53PEuJSXuWl0xXCXVe69Dy6cGGS1fZLdif7PbNm9Wm3eAyIb00AeM2emqR5mjagq4F2sgm+EENgx6Ji7k3gtXO2oZ9HFSih7qGo+WfbH/7aleW50YXTuOXrz778Mt2K6wgqbxwrgg3J7er2d2AeKYh19K1hXFrUH2wyM690JBwRRsVzKrFyKNAnE82kHhQJ7NSQkig9lKUMCxTRVQfL7ARKh75LDro0AQM8gTbITg80Fukks+lTLYGB/+0bCbNHzPt92nf7JYB+GZyExybD/yXAXQk7ZgyhHippLIcT3eyha5njTf5EkRBZRtS7bdLNQ/3su19ReZ7yMmsFN6V7Cb7VXF5q1ONAszIiAHtiu5r5sIXladhcoOGuNd7KWiT23gpJbdwU+kr5vXSebvylbqa5t1IYC06LZZ1McHlyLEBGFVJnFyTDUbOfqBoZy/p2hXJwQno8KnMBBRzopH6yXhK/ttAHtVvgQw1vhX2xXnsZkj4+BLjj79wmLX+CYXn9Sn/GIMOGxFH5cKdSSv0CImwf/FwewWX3c3kkKMQcGY4qBHxbL9/s3hZkWiMMYuoIFLLlPjj4sbKb0LrkPOJMjnj15cHN2o+ewGjEMpEoQhkdRpUDoMDeaJo5g6Y4ADLJ0+hF7gHkoGjoPnVIsJC5CjQErxXktwiL6ZhPea/zHc03tekgMfYqxIvSQWdK0T/cc6Fh6Tww5w9pkfX90w6/mZFxYlSaCOPg+x8WQsiAIUy1WWoSmWFRJCDxN2XK7fqG5ZwBMvLJ6d+PHi2TUWSwBHCIMVDInPn99gS95kF+IlpVuokL3OCnhjfQVkdqCdx5YhgqN17z1YPYTJfPcC9VkkyQNj9nAUqQwLjj3FtKoYZuuSDLYF0QnxdfV8Ibqiau1Qowv2oBzmoYRwG81e24jxXO0/9RIJ6io8Ya1nnr1ynrXwOOQ53SzZuYnnF0d5ImZYG9vhFw4bMmI9yO2Oyvec3A5+/hpfrtkcXqo/t3g+WEmLMhpYaHDddVbgBvtaCxweaMMKjLD67/MdEqs7ZOS1INaxVGGmjalbFyImtPrJnd//5/A5bnOIh+efdaBDKE56O0I3UEKAR4vlKyswRwM4DZZ8AUrVHeT+fcZXSWqVATr246/RcT67ByDOA0VmLwAOAz9yzqW7LTjEKWfB9RRH6S6yGugmyBNyJzDGCIhS6IXMv4sJpDoJ1hdJB6usCndtIpiUjRQf9EDG9yIucw2qECN02Ae2OFDB7zh3cjz60Q7iW0X0npzl5KHDqebvylYvSvOt4cbEs4sH+aIRiCFG0O2Qj5thxlYgp6CgBBpHV9cXH1WguMPdxnXbrD93RaZh0ih+w1NUf+bZxdZ/vT2cxlwWyMSzX7RCqFCBO9kYjPCdvQPJvVGQ7SC/f9MrCtsupkci5V8hNcfSgswPwwRMInzapvAKG6Ub8Bmv4OOp3dznQDJn1kx/euIqZVGAawanv0dJmTjGm0HnLhGHiUwAZjjGdV8K45UVSVRIJHQwMum7R+Mcp2SyN6uf+cBHhdDXufAlUjuE4rPcT7P50jECLBHesk+VSHZdjOtSSc23Hm6wekzlD20Z15j5vWv7h5Kxs5jaJeMOM4LVAYFwH5HMLnDK1eTMl6qOih+/BAUN1zpudXVHgp/RgeNEXvb3BYXi8vozFR7yQb4T9uvcBK/OYV0kFK1bmWQF46Eir1jqGd9Kx6/ZqjYVQcVEo7qPSLZv9Z69E1AUkD/21+tXeNLkuQ/ZXkjpBEr/J4qB7/8y9+JYc/p7rR7qbtfri/shZDHDCR0TKHODlv1jb4GQvpzng3KCga/Msbae5TJDNrBt6/f67b7DFrB+ZVCSP+31Y0tsu5rr9+/zHyBU/8Rt1pSS9KgvRCkoD/EWjPgoH1xW9804Tik5cWzRp4eAzHxaIkn52Qo75l/rRRPMA1RjT/UzAKVKlMdZnaAQB8pC8ZEfg6ho0SWjOG+Qtv5C+yAW452HG7AF4f6JwzzumA7wjq1m8ytIitB2amyORjlcftDLZGAYD+n8EgOqeaj4mWbz+y3YhmjdMM4jdJDAOEAdlFC3q8AlD+Helja83vsJNsPMVGxcbtU1dVbAQb7m483GLNSdZaPoxLCE+46xghabwnDPMgcMzgoUnTgo/hjWj35RduOocFQ0OzHRAv3R5juPNPPGv7jIl4yapkZvOnLTAaZGJdbJQFqtnKXm8xW+un1esd/bC335xsmxp/9cZ7syDWB5AyC7rh9ziQMqOK9gSX+lc6Y22Kkk9QxWheCA+TWaKBjI65h57PM3HSiNQ4Hp9lTyVSJcj4RwIprT78irBsegL/eV1McXh54/8vmm8eAXg2UUHjd/W0QwJO9+v1WNMCSUVFdP/TDN8cp/N3sanOZcRmKKTNToov+Y3LYUPixasvREbrSMa3FoYrmzx9h8t6Ev9428eGixtoz+YkauduzwlTZbphbzlzNV6LTlfAeqNXYFDiwve8myHgwGB1PCVEvKVCPa9V63O8wVkZJzCCkozH9zy8d7fU0zZI1oiDSJXQ/FRAUowu+klYUdtihWRqrL6FjzwvZ8pb58dbJC2QmmkWpG3+wBeaMZQ4gV2AHRUw9zGsiRonGDyxzVnZKDKuQPbiPkTyFhEYUWwAe6gpawGi6RqXKe5a54Ij1fCtHqpQdNVxk4y+LQ7louS9D7JUf+6NsXHuk5V64vfzmxLBWw+U2bXQ4aqAAm4y+4lLnlHzRn/7Yt3x3vwwvKpeWcHhrHR7nvRWRJBug7C7GyrFOZV10phMGMpE5Z0Br/w5goCoXkgdJ1lnLjNKFhnlbc/rff7Sve/SpV584TKX+XcjBLvrtyczGmzN9bA87tj4oX6ihwLDmlYkZLCW5Qph7z1Lgozdnh9rOH/9xiNRsN15n1S9pultS4O9CwjbmPvrAqwjXhWQB5/cN5ulk915z7+l9e2JeN5c3ZQL/sff6xz+tYcQflNR6kSSrhNSPeU5vplzZjhEs8uXNv/eGR1uo6qskC5WSeErxe3TfbJjHmfDGpWFIKPjHF5Ub4/GB08CJNkrZYSxZIHFAEORHgiNJ5/2/+doWV7uG+0n2D5Hcf/U2TP5qwDcHnDl/hUBft02+JQTdDGElnSD++PfvIGlAqyGcF/CRIXJFgTw40qMBPY8qG1oeXcIkVd571cmb37crcub6l+85JldFkGyEEhDXwZhtujGdIofBKhED0hccb14iZ4KNy/Nyh/xv15EbkZY7s+O0zRlFe09VmJV/izXWBt/D5t95ba4b78t0S2XYXFLEoBxNjdGVKJCLa7qlMb80GWqQFfelLF3EDlco5lIC7twQ6r9g3PV9J4S2i8v6Rk29/8MgM9KUv90iCZXtxfLGWuZVRJjomZAvmf0MUHpGkS7LV/lXn+rlzc3v7Pllf7qn8P5OkS2bHwPjXAAAAAElFTkSuQmCC";
+// אייקון תקציב/מטרה קווי לשימוש חוזר: בול-סטרֵט (עיגולים קונצנטריים) + חץ מהפינה + ניצוץ
+function TargetIcon({
+  size = 22,
+  color = GREEN,
+  sw = 2
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("circle", {
+    cx: 10.5,
+    cy: 13.5,
+    r: 7
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: 10.5,
+    cy: 13.5,
+    r: 3.8
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: 10.5,
+    cy: 13.5,
+    r: 0.9,
+    fill: color,
+    stroke: "none"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M10.5 13.5 L19 5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M14.5 5 H19 V9.5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M20.6 1.1 L21.4 2.7 L23 3.5 L21.4 4.3 L20.6 5.9 L19.8 4.3 L18.2 3.5 L19.8 2.7 Z",
+    fill: color,
+    stroke: "none"
+  }));
+}
+// אייקון הוצאה קווי: קבלה (receipt)
+function ExpenseIcon({
+  size = 22,
+  color = GREEN,
+  sw = 2
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M6 2.5 h12 v18 l-2 -1.3 l-2 1.3 l-2 -1.3 l-2 1.3 l-2 -1.3 l-2 1.3 Z"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M9 7.5 h6"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M9 11 h6"
+  }));
+}
+// אייקון הכנסה קווי: שטר כסף (banknote)
+function IncomeIcon({
+  size = 22,
+  color = GREEN,
+  sw = 2
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: 2.5,
+    y: 6,
+    width: 19,
+    height: 12,
+    rx: 2.5
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: 12,
+    cy: 12,
+    r: 3
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M6 9.5 v5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M18 9.5 v5"
+  }));
+}
+// אייקון יעד חיסכון קווי: קופת חזיר מחייכת עם מטבע $ (מונוכרום — נצבע לפי color). sw דק לגרסאות קטנות.
+function GoalIcon({
+  size = 22,
+  color = GREEN,
+  sw = 2
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("circle", {
+    cx: 15,
+    cy: 4.8,
+    r: 3.3
+  }), /*#__PURE__*/React.createElement("text", {
+    x: 15,
+    y: 6.45,
+    textAnchor: "middle",
+    fontSize: 4.6,
+    fontWeight: 700,
+    fill: color,
+    stroke: "none",
+    style: {
+      fontFamily: "system-ui, -apple-system, sans-serif"
+    }
+  }, "$"), /*#__PURE__*/React.createElement("ellipse", {
+    cx: 12.5,
+    cy: 15,
+    rx: 7.6,
+    ry: 5.7
+  }), /*#__PURE__*/React.createElement("ellipse", {
+    cx: 4.6,
+    cy: 15.4,
+    rx: 1.9,
+    ry: 1.7
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M4.1 14.9 v1"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M5.1 14.9 v1"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M8.6 9.5 l1.5 -2.3 l0.8 2.7"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M8 12.9 q0.9 0.9 1.8 0"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M11 9.3 h5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M20 13.6 c1.7 -0.5 2.1 1.1 1.2 1.9 c-0.7 0.6 -1.6 -0.1 -1.2 -1"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M8 20.4 v1.7"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M11.5 20.7 v1.5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M14.7 20.7 v1.5"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M18 20.1 v1.7"
+  }));
+}
+// אייקון "קבוע" קווי: נעץ (pushpin) בזווית
+function PinIcon({
+  size = 22,
+  color = GREEN,
+  sw = 2
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: color,
+    strokeWidth: sw,
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("g", {
+    transform: "rotate(42 12 12)"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: 9.4,
+    y: 2.4,
+    width: 5.2,
+    height: 6,
+    rx: 2.6
+  }), /*#__PURE__*/React.createElement("ellipse", {
+    cx: 12,
+    cy: 10.7,
+    rx: 5.4,
+    ry: 2.3
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M12 12.9 L12 21.4"
+  })));
+}
 const glass = (extra = {}) => ({
   background: "rgba(255,255,255,0.55)",
   backdropFilter: "blur(18px) saturate(160%)",
-  WebkitBackdropFilter: "blur(18px) saturate(160%)",
-  border: "1px solid rgba(255,255,255,0.65)",
+  WebkitBackdropFilter: "blur(18px) saturate(160%)",  border: "1px solid rgba(255,255,255,0.65)",
   boxShadow: "0 6px 22px -10px rgba(58,68,96,0.25), inset 0 1px 0 rgba(255,255,255,0.6)",
   ...extra
 });
@@ -2531,22 +2724,24 @@ function RollDigit({
     style: {
       display: "inline-block",
       height: "1em",
+      lineHeight: 1,
       overflow: "hidden",
-      lineHeight: "1em",
-      verticalAlign: "top"
+      verticalAlign: "middle"
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
       display: "block",
-      transform: `translateY(${-d * 10}%)`,
+      transform: `translateY(${-d}em)`,
       transition: "transform .8s cubic-bezier(.18,.85,.25,1)"
     }
   }, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => /*#__PURE__*/React.createElement("span", {
     key: n,
     style: {
-      display: "block",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
       height: "1em",
-      lineHeight: "1em"
+      lineHeight: 1
     }
   }, n))));
 }
@@ -2560,10 +2755,13 @@ function RollNumber({
     className: className,
     style: {
       ...style,
-      display: "inline-block",
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1,
       direction: "ltr",
+      unicodeBidi: "isolate",
       whiteSpace: "nowrap",
-      lineHeight: "1em"
+      verticalAlign: "middle"
     }
   }, str.split("").map((ch, i) => /\d/.test(ch) ? /*#__PURE__*/React.createElement(RollDigit, {
     key: i,
@@ -2571,11 +2769,11 @@ function RollNumber({
   }) : /*#__PURE__*/React.createElement("span", {
     key: i,
     style: {
-      display: "inline-block",
-      verticalAlign: "top",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
       height: "1em",
-      lineHeight: "1em",
-      textAlign: "center"
+      lineHeight: 1
     }
   }, ch)));
 }
@@ -3192,11 +3390,24 @@ function MonthCard({
   }))), /*#__PURE__*/React.createElement("span", {
     className: "font-semibold tabular-nums flex items-center gap-1",
     style: {
-      color: r.c
+      color: r.c,
+      lineHeight: 1
     }
-  }, r.v < 0 && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
+  }, r.v < 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1
+    }
+  }, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: Math.abs(r.v)
-  }), /*#__PURE__*/React.createElement("span", null, "₪"))) : /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1
+    }
+  }, "₪"))) : /*#__PURE__*/React.createElement("div", {
     key: key,
     className: "flex items-center justify-between text-[14px] " + enterCls
   }, /*#__PURE__*/React.createElement("span", {
@@ -3204,11 +3415,24 @@ function MonthCard({
   }, r.k), /*#__PURE__*/React.createElement("span", {
     className: "font-semibold tabular-nums flex items-center gap-1",
     style: {
-      color: r.c
+      color: r.c,
+      lineHeight: 1
     }
-  }, r.v < 0 && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
+  }, r.v < 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1
+    }
+  }, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: Math.abs(r.v)
-  }), /*#__PURE__*/React.createElement("span", null, "₪")));
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1
+    }
+  }, "₪")));
   return /*#__PURE__*/React.createElement("div", {
     className: "rounded-3xl p-4",
     style: glass()
@@ -3257,12 +3481,24 @@ function MonthCard({
   }, label), /*#__PURE__*/React.createElement("div", {
     className: "dashboard-blue-number-enter font-bold text-[21px] leading-tight flex items-center gap-1",
     style: {
-      color: "#fff"
+      color: "#fff",
+      lineHeight: 1
     }
-  }, over && /*#__PURE__*/React.createElement("span", null, "−"), /*#__PURE__*/React.createElement(RollNumber, {
+  }, over && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1
+    }
+  }, "−"), /*#__PURE__*/React.createElement(RollNumber, {
     n: blueDisp
   }), /*#__PURE__*/React.createElement("span", {
-    className: "text-[15px]"
+    className: "text-[15px]",
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      lineHeight: 1
+    }
   }, "₪"))), /*#__PURE__*/React.createElement("span", {
     className: "dashboard-blue-chip-enter rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap self-center",
     style: {
@@ -3356,9 +3592,11 @@ function MonthCard({
       }
     }, /*#__PURE__*/React.createElement("span", {
       className: "flex items-center gap-1.5"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "text-[13px]"
-    }, "🐷"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement(GoalIcon, {
+      size: 16,
+      color: gt.c,
+      sw: 0.6
+    }), /*#__PURE__*/React.createElement("span", {
       className: "text-[12px] font-semibold text-stone-600"
     }, goalLabel), amount > 0 && /*#__PURE__*/React.createElement("span", {
       className: "text-[12px] font-bold",
@@ -7509,7 +7747,8 @@ function MenuShell({
   onClose,
   children,
   width,
-  maxCap = 280
+  maxCap = 280,
+  boxStyle
 }) {
   const [pos, setPos] = useState(null);
   useLayoutEffect(() => {
@@ -7555,7 +7794,7 @@ function MenuShell({
         top: pos.top
       }),
       width: pos.W,
-      ...MENU_BOX,
+      ...(boxStyle || MENU_BOX),
       maxHeight: pos.maxH,
       transformOrigin: pos.up ? "bottom center" : "top center",
       animation: closing ? "popOut 140ms ease forwards" : "popIn 185ms cubic-bezier(.32,.72,0,1) both"
@@ -12519,21 +12758,25 @@ function TypeChooser({
   const opts = [{
     k: "goal",
     e: "🐷",
+    icon: GoalIcon,
     t: "חיסכון",
     s: "עדכון יעד חיסכון"
   }, {
     k: "income",
     e: "💰",
+    icon: IncomeIcon,
     t: "הכנסה",
     s: "עדכון ההכנסה החודשית"
   }, {
     k: "budget",
     e: "🎯",
+    icon: TargetIcon,
     t: "תקציב",
     s: "מעטפה חדשה עם יעד חודשי"
   }, {
     k: "expense",
     e: "🧾",
+    icon: ExpenseIcon,
     t: "הוצאה",
     s: "מוסיפים סכום, בוחרים תקציב, מסמנים אם חוזרת"
   }];
@@ -12551,13 +12794,15 @@ function TypeChooser({
       animationDelay: `${(opts.length - 1 - i) * 80}ms`
     }
   }, /*#__PURE__*/React.createElement("span", {
-    className: "shrink-0 grid place-items-center rounded-2xl text-2xl",
+    className: "shrink-0 grid place-items-center rounded-2xl",
     style: {
       width: 48,
       height: 48,
       background: "rgba(47,111,237,0.12)"
     }
-  }, o.e), /*#__PURE__*/React.createElement("span", {
+  }, /*#__PURE__*/React.createElement(o.icon, {
+    size: 26
+  })), /*#__PURE__*/React.createElement("span", {
     className: "flex-1 text-right"
   }, /*#__PURE__*/React.createElement("span", {
     className: "block font-bold text-[15px]",
@@ -14343,6 +14588,40 @@ function App() {
   }, [data.categories]);
 
   const [secCollapsed, setSecCollapsed] = useState({});
+  // תפריט שלוש-הנקודות של כרטיסיית קטגוריה (popover). רק אחד פתוח בכל רגע. UI בלבד.
+  const [catMenu, setCatMenu] = useState(null);
+  const [catMenuClosing, setCatMenuClosing] = useState(false);
+  const catMenuTimer = useRef(null);
+  const menuAnchorRef = useRef(null);
+  const closeCatMenu = () => {
+    setCatMenuClosing(true);
+    clearTimeout(catMenuTimer.current);
+    catMenuTimer.current = setTimeout(() => {
+      setCatMenu(null);
+      setCatMenuClosing(false);
+    }, 150);
+  };
+  const dismissCatMenu = () => {
+    clearTimeout(catMenuTimer.current);
+    setCatMenu(null);
+    setCatMenuClosing(false);
+  };
+  const toggleCatMenu = (id, btn) => {
+    if (catMenu === id && !catMenuClosing) {
+      closeCatMenu();
+      return;
+    }
+    clearTimeout(catMenuTimer.current);
+    menuAnchorRef.current = btn;
+    setCatMenuClosing(false);
+    setCatMenu(id);
+  };
+  useEffect(() => {
+    // סגירת התפריט במעבר חודש / טאב / משתמש (וניקוי טיימר)
+    clearTimeout(catMenuTimer.current);
+    setCatMenu(null);
+    setCatMenuClosing(false);
+  }, [ym, tab, activeId]);
   const toggleSec = key => setSecCollapsed(c => ({
     ...c,
     [key]: !c[key]
@@ -15887,18 +16166,34 @@ function App() {
       }, cat.name), /*#__PURE__*/React.createElement("span", {
         className: "block text-[10px] font-medium text-stone-400 mt-0.5"
       }, desc))), /*#__PURE__*/React.createElement("button", {
-        onClick: () => setModal({
-          type: "budgetForm",
-          prefill: {
-            catId: cat.id
-          }
-        }),
-        className: "shrink-0 rounded-full px-3 h-8 text-[12.5px] font-bold transition-transform active:scale-95 mt-0.5",
+        onClick: e => toggleCatMenu(cat.id, e.currentTarget),
+        "aria-label": "פעולות ל" + cat.name,
+        className: "shrink-0 grid place-items-center rounded-full transition-transform active:scale-95 mt-0.5",
         style: {
-          background: "transparent",
-          color: GREEN
+          width: 40,
+          height: 40,
+          background: "#e8f0fe"
         }
-      }, "+ תקציב")), /*#__PURE__*/React.createElement("div", {
+      }, /*#__PURE__*/React.createElement("svg", {
+        width: 22,
+        height: 22,
+        viewBox: "0 0 24 24"
+      }, /*#__PURE__*/React.createElement("circle", {
+        cx: 5,
+        cy: 12,
+        r: 2,
+        fill: GREEN
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: 12,
+        cy: 12,
+        r: 2,
+        fill: GREEN
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: 19,
+        cy: 12,
+        r: 2,
+        fill: GREEN
+      })))), /*#__PURE__*/React.createElement("div", {
         style: {
           height: 1,
           background: "rgba(90,102,128,0.22)",
@@ -15977,21 +16272,27 @@ function App() {
         const out = [];
         const recCount = fixedB.length + recUnb.length;
         if (recCount) {
-          out.push(header(cat.id + ":fixed", "📌", "קבוע", recCount, false));
+          out.push(header(cat.id + ":fixed", /*#__PURE__*/React.createElement(PinIcon, {
+            size: 14
+          }), "קבוע", recCount, false));
           out.push(/*#__PURE__*/React.createElement(Collapse, {
             key: "cf-" + cat.id,
             open: !secCollapsed[cat.id + ":fixed"]
           }, fixedB.map((b, i) => row(b, i)), recUnb.map((e, i) => expRow(e, i, i > 0 || fixedB.length > 0))));
         }
         if (varB.length) {
-          out.push(header(cat.id + ":var", "🎯", "תקציבי מעקב", varB.length, recCount > 0));
+          out.push(header(cat.id + ":var", /*#__PURE__*/React.createElement(TargetIcon, {
+            size: 14
+          }), "תקציבי מעקב", varB.length, recCount > 0));
           out.push(/*#__PURE__*/React.createElement(Collapse, {
             key: "cv-" + cat.id,
             open: !secCollapsed[cat.id + ":var"]
           }, varB.map((b, i) => row(b, i))));
         }
         if (plainUnb.length) {
-          out.push(header(cat.id + ":unb", "🧾", "לא מתוקצב", plainUnb.length, recCount > 0 || varB.length > 0));
+          out.push(header(cat.id + ":unb", /*#__PURE__*/React.createElement(ExpenseIcon, {
+            size: 14
+          }), "לא מתוקצב", plainUnb.length, recCount > 0 || varB.length > 0));
           out.push(/*#__PURE__*/React.createElement(Collapse, {
             key: "cu-" + cat.id,
             open: !secCollapsed[cat.id + ":unb"]
@@ -16033,7 +16334,125 @@ function App() {
     })
   }), /*#__PURE__*/React.createElement(CloseCtx.Provider, {
     value: closing
-  }, modal?.type === "chooser" && /*#__PURE__*/React.createElement(TypeChooser, {
+  }, catMenu && (() => {
+    const cat = (data.categories || []).find(c => c.id === catMenu);
+    if (!cat) return null;
+    const catClosed = !!(secCollapsed[cat.id + ":fixed"] && secCollapsed[cat.id + ":var"] && secCollapsed[cat.id + ":unb"]);
+    const row = o => /*#__PURE__*/React.createElement("button", {
+      key: o.key,
+      className: "catmenu-row",
+      onClick: o.onClick
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 14,
+        fontWeight: 600,
+        color: o.color || INK
+      }
+    }, o.label), o.icon);
+    const gap = catClosed ? 1.6 : 4; // זהה לאייקון "תצוגה: הכל פתוח/סגור": קווים מרוחקים=פתוח, קרובים=סגור
+    const viewIcon = /*#__PURE__*/React.createElement("svg", {
+      width: 19,
+      height: 19,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: GREEN,
+      strokeWidth: 2.4,
+      strokeLinecap: "round"
+    }, /*#__PURE__*/React.createElement("line", {
+      x1: 5,
+      y1: 12,
+      x2: 19,
+      y2: 12,
+      style: {
+        transition: "transform .28s cubic-bezier(.22,1,.36,1)",
+        transform: "translateY(" + -gap + "px)"
+      }
+    }), /*#__PURE__*/React.createElement("line", {
+      x1: 5,
+      y1: 12,
+      x2: 19,
+      y2: 12,
+      style: {
+        transition: "transform .28s cubic-bezier(.22,1,.36,1)",
+        transform: "translateY(" + gap + "px)"
+      }
+    }));
+    const plusIcon = /*#__PURE__*/React.createElement(ExpenseIcon, {
+      size: 22
+    });
+    const targetIcon = /*#__PURE__*/React.createElement(TargetIcon, {
+      size: 23
+    });
+    return /*#__PURE__*/React.createElement(MenuShell, {
+      key: catMenu,
+      anchorRef: menuAnchorRef,
+      closing: catMenuClosing,
+      onClose: closeCatMenu,
+      width: 246,
+      boxStyle: {
+        background: "#fff",
+        borderRadius: 16,
+        padding: 6,
+        border: "1px solid rgba(122,134,158,0.12)",
+        boxShadow: "0 16px 38px -10px rgba(20,30,55,0.28), 0 3px 10px rgba(20,30,55,0.10)"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      dir: "rtl"
+    }, row({
+      key: "v",
+      label: "תצוגה: " + (catClosed ? "סגור" : "פתוח"),
+      color: GREEN,
+      icon: viewIcon,
+      onClick: () => {
+        setSecCollapsed(s => {
+          const n = {
+            ...s
+          };
+          if (catClosed) {
+            delete n[cat.id + ":fixed"];
+            delete n[cat.id + ":var"];
+            delete n[cat.id + ":unb"];
+          } else {
+            n[cat.id + ":fixed"] = true;
+            n[cat.id + ":var"] = true;
+            n[cat.id + ":unb"] = true;
+          }
+          return n;
+        });
+        closeCatMenu();
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "catmenu-divider"
+    }), row({
+      key: "e",
+      label: "הוסף הוצאה ל" + cat.name,
+      icon: plusIcon,
+      onClick: () => {
+        setModal({
+          type: "expenseForm",
+          prefill: {
+            catId: cat.id
+          }
+        });
+        dismissCatMenu();
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "catmenu-divider"
+    }), row({
+      key: "b",
+      label: "הוסף תקציב ל" + cat.name,
+      icon: targetIcon,
+      onClick: () => {
+        setModal({
+          type: "budgetForm",
+          prefill: {
+            catId: cat.id
+          }
+        });
+        dismissCatMenu();
+      }
+    })));
+  })(), modal?.type === "chooser" && /*#__PURE__*/React.createElement(TypeChooser, {
     onClose: closeModal,
     onPick: k => {
       if (k === "goal") setModal({
