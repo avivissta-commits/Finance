@@ -14,8 +14,9 @@
  *                       -> 200 { rev, updatedAt }  |  409 { ...serverCopy }  (אם בשרת יש גרסה חדשה יותר)
  *   GET  /api/health    -> { ok:true }
  *
- * מדיניות conflict: last-write-wins לפי updatedAt. אם ל-Worker יש updatedAt חדש יותר
- * מזה שנשלח — מוחזר 409 עם עותק השרת, והלקוח מאמץ אותו (ומראה טוסט "סונכרן ממכשיר אחר").
+ * מדיניות conflict: לקוח חדש שולח baseRev ומבצע compare-and-swap. snapshot שנבנה
+ * על revision ישן נדחה ב-409 ולכן אינו יכול לדרוס snapshot חדש. לקוחות ישנים ללא
+ * baseRev נשארים תואמים למדיניות updatedAt הקודמת.
  */
 
 const CORS = {
@@ -68,17 +69,23 @@ async function handleApi(request, env, url) {
     const incomingUpdated = +body.updatedAt || 0;
     const existingRaw = await env.HAKESEF.get(key);
     const existing = existingRaw ? JSON.parse(existingRaw) : null;
+    const existingRev = (existing && +existing.rev) || 0;
+    const hasBaseRev = body.baseRev != null && body.baseRev !== "";
+    const baseRev = hasBaseRev ? +body.baseRev || 0 : null;
 
-    // conflict: בשרת יש גרסה חדשה יותר -> דחייה + החזרת עותק השרת
-    if (existing && (+existing.updatedAt || 0) > incomingUpdated) {
+    // לקוח חדש: רק מי שקרא את ה-revision הנוכחי רשאי לכתוב את הבא.
+    // לקוח ישן: תאימות לאחור לפי updatedAt.
+    const revisionConflict = hasBaseRev && baseRev !== existingRev;
+    const legacyConflict = !hasBaseRev && existing && (+existing.updatedAt || 0) > incomingUpdated;
+    if (revisionConflict || legacyConflict) {
       return json(existing, 409);
     }
 
-    const rev = Math.max((existing && +existing.rev) || 0, +body.rev || 0);
+    const rev = hasBaseRev ? existingRev + 1 : Math.max(existingRev + 1, +body.rev || 0);
     const envelope = {
       schema: +body.schema || 1,
       rev,
-      updatedAt: incomingUpdated || Date.now(),
+      updatedAt: Math.max(Date.now(), incomingUpdated, (existing && +existing.updatedAt || 0) + 1),
       data: body.data,
     };
     await env.HAKESEF.put(key, JSON.stringify(envelope));
