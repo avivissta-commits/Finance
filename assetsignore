@@ -1,11 +1,19 @@
-worker.js
-wrangler.toml
-wrangler.jsonc
-DEPLOY.md
-README.md
-hotzaot.html
-package.json
-package-lock.json
-node_modules
-.git
-.gitignore
+# ==== כלי אבחון/בדיקה — לעולם לא להגיש לציבור ====
+# (wrangler מגיש directory=".", לכן חובה להחריג את קבצי הבדיקה)
+
+# התיקייה כולה
+debug-tools/
+
+# בנוסף — הגנה גם אם קובץ נשאר בטעות בשורש (glob לפי שם)
+*.test.js
+index.state-d-guard.html
+index.post-restore-guard.html
+index.phase2a.html
+index.logs.html
+index.audit-readonly.html
+index.phase2b-audit.html
+index.deep-forensic.html
+index.yossi-forensic.html
+index.restore-yossi-local.html
+index.roster-audit.console.js
+index.1c-state-d-guard.html
